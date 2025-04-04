@@ -1,0 +1,37 @@
+__pycache__
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# binaries
+*.so
+
+# tmp files
+*.swp
+
+# AML workspace config file
+config.json
+
+.coverage_*
+*~
+slurm*
+logs
+
+# Data folder
+bookcorpus_data/
+
+tmp/
+ds-configs/
+.kube/
+wandb/
+events.out.tfevents.*
+model_zoom/
+N128/
+old-sota-yamls/
+outputs/
+datasets/
+*.log
+results/
+*.pdb
