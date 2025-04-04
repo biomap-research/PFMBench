@@ -27,7 +27,7 @@
             // ],
             "env": {
                 "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/",
-                "CUDA_VISIBLE_DEVICES": "0",
+                "CUDA_VISIBLE_DEVICES": "1",
                 "CONFIG_NAME": "fitness_prediction",
                 "EXP_NAME": "fitness_prediction",
                 "OFFLINE": "1"

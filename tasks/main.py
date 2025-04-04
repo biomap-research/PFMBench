@@ -49,6 +49,7 @@ def create_parser(hydra_config=None):
     
     # Model parameters
     parser.add_argument('--finetune_type', default='adpter', type=str)
+    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m'])
 
     # 使用 sys.argv 解析命令行参数，优先级高于 hydra 配置
     args, unknown = parser.parse_known_args(args=sys.argv[1:], namespace=hydra_config)
