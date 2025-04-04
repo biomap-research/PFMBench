@@ -37,7 +37,7 @@ class ProteinDataset(Dataset):
             path_list.append([csv_data.iloc[i]['pdb_path'], csv_data.iloc[i]['label']])
         
         path_list = path_list[:100]
-        self.data = pmap_multi(read_data, path_list)
+        self.data = pmap_multi(read_data, path_list, n_jobs=10)
         self.data = [d for d in self.data if d is not None]
         
         if pretrain_model_interface is not None:

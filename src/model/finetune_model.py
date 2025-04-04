@@ -27,15 +27,32 @@ class UniModel(nn.Module):
             if pretrain_model_name == 'esm3_1.4b':
                 self.proj = nn.Linear(1536, hid_dim)
             
+            if pretrain_model_name == 'esmc_600m':
+                self.proj = nn.Linear(1152, hid_dim)
+            
+            if pretrain_model_name == 'progen2':
+                self.proj = nn.Linear(1536, hid_dim)
+            
+            if pretrain_model_name == 'prostt5':
+                self.proj = nn.Linear(2048, hid_dim)
+            
+            if pretrain_model_name == 'protgpt2':
+                self.proj = nn.Linear(1280, hid_dim)
+            
+            if pretrain_model_name == 'protrek':
+                self.proj = nn.Linear(1024, hid_dim)
+            
+            if pretrain_model_name == 'saport':
+                self.proj = nn.Linear(1280, hid_dim)
+            
             self.adapter = TransformerAdapter(
                     input_dim=hid_dim,               # 输入维度
                     hidden_dim=hid_dim,          # 隐藏层维度
-                    
                     num_layers=6,                # Transformer 层数
                     num_heads=20,                 # 多头注意力头数
                 )
-            
-                
+        
+        
         # if pretrain_model_name == 'esm2_650m':
         #     self.tokenizer = AutoTokenizer.from_pretrained("model_zoom/esm2_650m")
         #     pretrain_model = AutoModelForMaskedLM.from_pretrained("model_zoom/esm2_650m")
