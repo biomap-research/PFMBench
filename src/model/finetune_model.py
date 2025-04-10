@@ -44,6 +44,12 @@ class UniModel(nn.Module):
             
             if pretrain_model_name == 'saport':
                 self.proj = nn.Linear(1280, hid_dim)
+
+            if pretrain_model_name == 'procyon':
+                self.proj = nn.Linear(4096, hid_dim)
+
+            if pretrain_model_name == 'prollama':
+                self.proj = nn.Linear(4096, hid_dim)
             
             self.adapter = TransformerAdapter(
                     input_dim=hid_dim,               # 输入维度
@@ -52,7 +58,27 @@ class UniModel(nn.Module):
                     num_heads=20,                 # 多头注意力头数
                 )
         
-        
+        if pretrain_model_name == 'prollama':
+            from transformers import LlamaForCausalLM, LlamaTokenizer
+            llama_path = "/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark_project/data/ProLLaMA"
+            pretrain_model = LlamaForCausalLM.from_pretrained(
+                llama_path,
+                torch_dtype=torch.bfloat16,
+                # low_cpu_mem_usage=True,
+                # device_map='auto',
+                quantization_config=None
+            )
+            if finetune_type == 'lora':
+                lora_config = LoraConfig(
+                                        inference_mode=False,        # 训练模式
+                                        r=lora_r,                         # 低秩矩阵的秩
+                                        lora_alpha=lora_alpha,               # LoRA 的 alpha 参数
+                                        lora_dropout=lora_dropout,            # Dropout 防止过拟合
+                                        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],  # 仅调整 Attention 的 query 和 value
+                                        )
+                self.pretrain_model = get_peft_model(pretrain_model, lora_config)
+                self.proj = nn.Linear(4096, hid_dim)
+
         # if pretrain_model_name == 'esm2_650m':
         #     self.tokenizer = AutoTokenizer.from_pretrained("model_zoom/esm2_650m")
         #     pretrain_model = AutoModelForMaskedLM.from_pretrained("model_zoom/esm2_650m")
@@ -105,21 +131,29 @@ class UniModel(nn.Module):
                 return {'loss': loss, 'logits': logits}
             else:
                 return {'logits': logits}
-            
-        # seqs = batch['seq']
-        # attention_mask = batch['mask']==0
-        # labels = batch['label']
-        # if self.pretrain_model_name == 'esm2_650m':
-        #     proj_output = self.proj(hidden_states)
-                
-        #     if self.finetune_type == 'lora':
-        #         outputs = self.pretrain_model.esm(
-        #             seqs,
-        #             attention_mask=attention_mask,
-        #             return_dict=True,
-        #         )
-        #         hidden_states = outputs.last_hidden_state
-        #         proj_output = self.proj(hidden_states)
+        
+        seqs = batch['seq']
+        attention_mask = batch['mask']==0
+        labels = batch['label']
+        if self.pretrain_model_name == 'esm2_650m':
+            if self.finetune_type == 'lora':
+                outputs = self.pretrain_model.esm(
+                    seqs,
+                    attention_mask=attention_mask,
+                    return_dict=True,
+                )
+                hidden_states = outputs.last_hidden_state
+                proj_output = self.proj(hidden_states)
+        
+        if self.pretrain_model_name == 'prollama':                
+            if self.finetune_type == 'lora':
+                outputs = self.pretrain_model(
+                    input_ids = seqs,
+                    attention_mask=attention_mask,
+                    output_hidden_states=True
+                )
+                hidden_states = outputs.hidden_states[-1]
+                proj_output = self.proj(hidden_states)
                 
         #     if self.finetune_type == 'adapter':
         #         with torch.no_grad():
@@ -134,14 +168,14 @@ class UniModel(nn.Module):
         #         proj_output = self.adapter(proj_output, mask=attention_mask)
             
             
-        #     pooled_output = torch.mean(proj_output, dim=1)
-        #     logits = self.task_head(pooled_output)
+            pooled_output = torch.mean(proj_output, dim=1)
+            logits = self.task_head(pooled_output)
         
-        #     if labels is not None:
-        #         loss = self.loss(logits, labels)
-        #         return {'loss': loss, 'logits': logits}
-        #     else:
-        #         return {'logits': logits}
+            if labels is not None:
+                loss = self.loss(logits, labels)
+                return {'loss': loss, 'logits': logits}
+            else:
+                return {'logits': logits}
         
 # Transformer Adapter 模块
 class TransformerAdapter(nn.Module):

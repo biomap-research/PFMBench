@@ -1,69 +1,65 @@
 import torch
 import numpy as np
-from collections.abc import Mapping, Sequence
-from tqdm.auto import tqdm
+from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
+
+# 顶层函数，multiprocessing 才能 pickle
+def _worker(args):
+    fn, d, kwargs = args
+    return fn(*d, **kwargs)  # d 必须是 tuple；如果是单参数就传成 (d,) 即可
+
+
 from joblib import Parallel, delayed, cpu_count
-from joblib.externals.loky import set_loky_pickler
-# from src.tools.affine_utils import Rigid
-
-def cuda(obj, *args, **kwargs):
-    """
-    Transfer any nested conatiner of tensors to CUDA.
-    """
-    if hasattr(obj, "cuda"):
-        return obj.cuda(*args, **kwargs)
-    elif isinstance(obj, Mapping):
-        return type(obj)({k: cuda(v, *args, **kwargs) for k, v in obj.items()})
-    elif isinstance(obj, Sequence):
-        if isinstance(obj, str):
-            return obj
-        return type(obj)(cuda(x, *args, **kwargs) for x in obj)
-    elif isinstance(obj, np.ndarray):
-        return torch.tensor(obj, *args, **kwargs)
-    elif isinstance(obj, Rigid):
-        return obj.to(*args, **kwargs)
-    else:
-        return obj
-        
-
-    raise TypeError("Can't transfer object type `%s`" % type(obj))
+from tqdm import tqdm
 
 def pmap_multi(pickleable_fn, data, n_jobs=None, verbose=1, desc=None, **kwargs):
-    """
-
-    Parallel map using joblib.
-
-    Parameters
-    ----------
-    pickleable_fn : callable
-        Function to map over data.
-    data : iterable
-        Data over which we want to parallelize the function call.
-    n_jobs : int, optional
-        The maximum number of concurrently running jobs. By default, it is one less than
-        the number of CPUs.
-    verbose: int, optional
-        The verbosity level. If nonzero, the function prints the progress messages.
-        The frequency of the messages increases with the verbosity level. If above 10,
-        it reports all iterations. If above 50, it sends the output to stdout.
-    kwargs
-        Additional arguments for :attr:`pickleable_fn`.
-
-    Returns
-    -------
-    list
-        The i-th element of the list corresponds to the output of applying
-        :attr:`pickleable_fn` to :attr:`data[i]`.
-    """
     if n_jobs is None:
         n_jobs = cpu_count()
-    # n_jobs = 60
-    results = Parallel(n_jobs=n_jobs, verbose=verbose, timeout=None)(
-    delayed(pickleable_fn)(*d, **kwargs) for i, d in tqdm(enumerate(data),desc=desc)
-    )
 
+    # 定义一个真正可以 pickling 的函数，避免 lambda 引起问题
+    def _wrapped(d):
+        return pickleable_fn(*d, **kwargs)
+
+    # tqdm 外部包裹，不要嵌入 generator 里
+    data_iter = list(tqdm(data, desc=desc))
+
+    results = Parallel(n_jobs=n_jobs, verbose=verbose, timeout=None)(
+        delayed(_wrapped)(d) for d in data_iter
+    )
     return results
 
+    
+# def pmap_multi(pickleable_fn, data, n_jobs=None, desc=None, **kwargs):
+#     """
+#     Parallel map using multiprocessing.Pool, supports multi-argument unpacking.
+
+#     Parameters
+#     ----------
+#     pickleable_fn : callable
+#         Function to apply.
+#     data : list of tuple
+#         Inputs to apply the function on. Each element is a tuple of positional arguments.
+#     n_jobs : int
+#         Number of processes. Defaults to all available CPUs.
+#     desc : str
+#         tqdm description.
+#     kwargs : dict
+#         Extra keyword arguments passed to the function.
+
+#     Returns
+#     -------
+#     List of function outputs.
+#     """
+#     if n_jobs is None:
+#         n_jobs = cpu_count()
+
+#     # 构建 [(fn, d_i, kwargs)] 列表
+#     task_args = [(pickleable_fn, d if isinstance(d, tuple) else (d,), kwargs) for d in data]
+
+#     with Pool(processes=n_jobs) as pool:
+#         results = list(tqdm(pool.imap(_worker, task_args), total=len(data), desc=desc))
+
+#     return results
 
 
 def modulo_with_wrapped_range(

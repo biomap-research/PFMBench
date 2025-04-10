@@ -1,6 +1,6 @@
 Output:
   res_dir: "tasks/results/fitness_prediction"
-  ex_name: ${oc.env:EXP_NAME, 'default'}
+  ex_name: "fitness_prediction_adapter" # ${oc.env:EXP_NAME, 'default'}
   offline: ${eval:"int(${oc.env:OFFLINE, '1'})"}
 
 Data:
@@ -9,17 +9,17 @@ Data:
   test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/fitness_prediction/fitness_prediction_with_glmfold_structure_test.csv"
 
 Training:
-  epoch: 20  # end epoch
+  epoch: 50  # end epoch
   lr: 1e-4  # Learning rate
   lr_scheduler: "cosine"
   check_val_every_n_epoch: 1
   seed: 2024
-  batch_size: 64
+  batch_size: 8
   num_workers: 4
   seq_len: 1024
 
 Model:
-  pretrain_model_name: 'saport'
+  pretrain_model_name: 'esm2_650m'
   finetune_type: 'adapter'
   lora_r: 8                  # 低秩矩阵的秩
   lora_alpha: 32             # LoRA 的 alpha 参数

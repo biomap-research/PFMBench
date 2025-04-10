@@ -2,7 +2,8 @@ import datetime
 import os
 import sys
 sys.path.append(os.getcwd())
-os.environ["WANDB_API_KEY"] = "ddb1831ecbd2bf95c3323502ae17df6e1df44ec0"
+# os.environ["WANDB_API_KEY"] = "ddb1831ecbd2bf95c3323502ae17df6e1df44ec0" # gzy
+os.environ["WANDB_API_KEY"] = "ddb1831ecbd2bf95c3323502ae17df6e1df44ec0" # wh
 import warnings
 warnings.filterwarnings("ignore")
 import argparse
@@ -18,6 +19,7 @@ import hydra
 from src.utils.logger import SetupCallback
 from src.utils.utils import flatten_dict
 import math
+import wandb
 
 def eval_resolver(expr: str):
     return eval(expr, {}, {})
@@ -35,15 +37,16 @@ def create_parser(hydra_config=None):
     parser.add_argument('--res_dir', default='./results', type=str)
     parser.add_argument('--ex_name', default='debug', type=str)
     parser.add_argument('--check_val_every_n_epoch', default=1, type=int)
-    parser.add_argument('--offline', default=0, type=int)
+    parser.add_argument('--offline', default=1, type=int)
     parser.add_argument('--seed', default=2024, type=int)
     
     parser.add_argument('--batch_size', default=32, type=int)
+    parser.add_argument('--pretrain_batch_size', default=32, type=int)
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--seq_len', default=1022, type=int)
     
     # Training parameters
-    parser.add_argument('--epoch', default=5, type=int, help='end epoch')
+    parser.add_argument('--epoch', default=10, type=int, help='end epoch')
     parser.add_argument('--lr', default=1e-4, type=float, help='Learning rate')
     parser.add_argument('--lr_scheduler', default='cosine')
     
@@ -101,11 +104,36 @@ def load_callbacks(args):
             logging_interval=None))
     return callbacks
 
+
+def automl_setup(args, logger):
+    args.res_dir = os.path.join(args.res_dir, args.ex_name)
+    print(wandb.run)
+    args.ex_name = wandb.run.id
+    wandb.run.name = wandb.run.id
+    logger._save_dir = str(args.res_dir)
+    os.makedirs(logger._save_dir, exist_ok=True)
+    logger._name = wandb.run.name
+    logger._id = wandb.run.id
+    return args, logger
+    
+
 @hydra.main(version_base=None, config_path="configs", config_name=CONFIG_NAME)
 def main(cfg: DictConfig):
     config_dict = OmegaConf.to_container(cfg, resolve=True)
     args = create_parser(hydra_config=argparse.Namespace(**flatten_dict(config_dict)))
+    if args.offline:
+        os.environ["WANDB_MODE"] = "offline"
+    wandb.init(project='protein_benchmark', entity='biomap_ai')
+    logger = plog.WandbLogger(
+                    project = 'protein_benchmark',
+                    name=args.ex_name,
+                    save_dir=str(os.path.join(args.res_dir, args.ex_name)),
+                    offline = args.offline,
+                    entity = "biomap_ai")
     
+    #================ for wandb sweep ==================
+    args, logger = automl_setup(args, logger)
+    #====================================================
     
     pl.seed_everything(args.seed)
     data_module = DInterface(**vars(args))
@@ -115,8 +143,6 @@ def main(cfg: DictConfig):
     args.lr_decay_steps =  steps_per_epoch*args.epoch
     
     model = MInterface(**vars(args))
-
-
 
     data_module.MInterface = model
     callbacks = load_callbacks(args)
@@ -129,12 +155,7 @@ def main(cfg: DictConfig):
         "precision": 'bf16', # "bf16", 16
         'accelerator': 'gpu',  # Use distributed data parallel
         'callbacks': callbacks,
-        'logger': plog.WandbLogger(
-                    project = 'protein_benchmark',
-                    name=args.ex_name,
-                    save_dir=str(os.path.join(args.res_dir, args.ex_name)),
-                    offline = args.offline,
-                     entity = "gaozhangyang"),
+        'logger': logger,
         'gradient_clip_val':1.0,
     }
 
@@ -143,7 +164,7 @@ def main(cfg: DictConfig):
     trainer = Trainer(**vars(trainer_opt))
 
     trainer.fit(model, data_module)
-    
+
     # ============================
     # 4. 评估最佳模型
     # ============================
@@ -151,11 +172,12 @@ def main(cfg: DictConfig):
     print(f"Best model path: {checkpoint_callback.best_model_path}")
 
     # 载入最佳模型
-    best_model = model.load_from_checkpoint(checkpoint_callback.best_model_path)
+    model_state_path = os.path.join(checkpoint_callback.best_model_path, "checkpoint", "mp_rank_00_model_states.pt")
+    state = torch.load(model_state_path, map_location="cuda:0")
+    model.load_state_dict(state['module'])
 
     # 进行测试
-    results = trainer.test(best_model, datamodule=data_module)
-
+    results = trainer.test(model, datamodule=data_module)
     # 打印测试结果
     print(f"Test Results: {results}")
 

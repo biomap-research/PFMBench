@@ -7,47 +7,56 @@ import torch.nn.functional as F
 from src.utils.utils import pmap_multi
 from src.data.esm.sdk.api import ESMProtein
 
+
+def read_data(pdb_path, label, unique_id):
+    try:
+        # 解析 pdb 文件，unique_id 作为结构的 id
+        structure = ESMProtein.from_pdb(pdb_path)
+        # X, C, S = structure.to_XCS(all_atom=True)
+        # X, C, S = X[0], C[0], S[0]
+        
+        # seq = structure.sequence()
+        name = str(hash(pdb_path))
+        return {'name':name, 'seq': structure.sequence, 'X': structure.coordinates, 'label': label, 'unique_id': unique_id}
+    except:
+        return None
 class ProteinDataset(Dataset):
-    def __init__(self, csv_file, pretrain_model_name='esm2_650m', max_length=1022, pretrain_model_interface=None):
+    def __init__(self, csv_file, pretrain_model_name='esm2_650m', max_length=1022, pretrain_model_interface=None, task_name='pretrain'):
         """
         Args:
             csv_file (str): CSV 文件路径，文件中包含蛋白质序列和结构等信息。
         """
         self.max_length = max_length
         self.pretrain_model_name = pretrain_model_name
+        self.task_name = task_name
         
         # 读取 CSV 数据
         csv_data = pd.read_csv(csv_file)
         
-        def read_data(pdb_path, label):
-            try:
-                # 解析 pdb 文件，unique_id 作为结构的 id
-                structure = ESMProtein.from_pdb(pdb_path)
-                # X, C, S = structure.to_XCS(all_atom=True)
-                # X, C, S = X[0], C[0], S[0]
-                
-                # seq = structure.sequence()
-                name = str(hash(pdb_path))
-                return {'name':name, 'seq': structure.sequence, 'X': structure.coordinates, 'label': label}
-            except:
-                return None
+        
         
         path_list = []
         for i in range(len(csv_data)):
-            path_list.append([csv_data.iloc[i]['pdb_path'], csv_data.iloc[i]['label']])
+            path_list.append((csv_data.iloc[i]['pdb_path'], csv_data.iloc[i]['label'], csv_data.iloc[i]['unique_id'])) #列表里面必须是元组，不然debug模式下并行加载数据会报错
         
-        path_list = path_list[:100]
-        self.data = pmap_multi(read_data, path_list, n_jobs=10)
+        # path_list = path_list[:1000]
+        self.data = pmap_multi(read_data, path_list)
         self.data = [d for d in self.data if d is not None]
-        
+        self.pretrain_model_interface = pretrain_model_interface
+
         if pretrain_model_interface is not None:
-            self.data = pretrain_model_interface.inference_datasets(self.data)
+            self.data = pretrain_model_interface.inference_datasets(self.data, task_name=self.task_name)
         
         print(f"ProteinDataset: {len(self.data)} samples loaded.")
         
-        # if pretrain_model_name == 'esm2_650m':
-        #     self.tokenizer = AutoTokenizer.from_pretrained("model_zoom/esm2_650m")
-        
+        if pretrain_model_name == 'esm2_650m':
+            self.tokenizer = AutoTokenizer.from_pretrained("model_zoom/esm2_650m")
+
+        if pretrain_model_name == 'prollama':
+            from transformers import LlamaTokenizer
+            llama_path = "/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark_project/data/ProLLaMA"
+            self.tokenizer = LlamaTokenizer.from_pretrained(llama_path)
+
     def __len__(self):
         return len(self.data)
     
@@ -60,8 +69,28 @@ class ProteinDataset(Dataset):
         return data
     
     def __getitem__(self, idx):
-        return self.data[idx]
-    
+        if self.pretrain_model_interface is not None:
+            return self.data[idx]
+        else:
+            seq = self.data[idx]['seq']
+            label = self.data[idx]['label']
+            X = self.data[idx]['X']
+            X = dynamic_pad(X, [1, 1], dim=0, pad_value=0)
+            X = self.pad_data(X, dim=0)
+            if self.pretrain_model_name == 'prollama':
+                mask = torch.ones(self.max_length)
+                seq_token = torch.tensor(self.tokenizer.encode(seq))
+                mask[:len(seq_token)] = 0
+                seq_token = self.pad_data(seq_token, dim=0)
+                sample = {
+                    'seq': seq_token,
+                    'label': torch.tensor(label),
+                    'mask': mask,
+                    'coords': X,
+                }
+
+            return sample
+
     # def __getitem__(self, idx):
     #     seq = self.data[idx]['seq']
     #     label = self.data[idx]['label']

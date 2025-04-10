@@ -13,8 +13,11 @@ class DInterface_base(pl.LightningDataModule):
         self.num_workers = num_workers
         self.dataset = dataset
         self.kwargs = kwargs
-        self.batch_size = kwargs['batch_size']
+        self.batch_size = kwargs.get('batch_size', 4)
+        self.task_name = kwargs.get("task_name")
+        self.finetune_type = kwargs.get("finetune_type")
         print("batch_size", self.batch_size)
+        print("task_name", self.task_name)
 
     # def setup(self, stage=None):
     #     # Assign train/val datasets for use in dataloaders

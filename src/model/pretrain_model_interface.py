@@ -3,6 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from src.data.protein_dataset import dynamic_pad
 from src.data.esm.sdk.api import LogitsConfig
+import os
+import pickle
+from tqdm import tqdm
 import sys; sys.path.append('/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom')
 
 MODEL_ZOOM_PATH = '/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom'
@@ -35,9 +38,39 @@ class PretrainModelInterface(nn.Module):
             from model_zoom.esm.models.esmc import ESMC
             self.pretrain_model = ESMC.from_pretrained("esmc_600m").to(self.device)
         elif self.pretrain_model_name == 'procyon':
-            pass
+            # ProCyon uses ESM2-3B and GearNet as the protein sequence encoder and the protein structure 
+            # encoder, respectively.
+            from transformers import AutoTokenizer, AutoModelForMaskedLM
+            from model_zoom.procyon.model.model_unified import UnifiedProCyon
+            os.environ["HOME_DIR"] = MODEL_ZOOM_PATH
+            os.environ["DATA_DIR"] = "/nfs_beijing/wanghao/2025-onesystem/vllm/ProCyon-Instruct"
+            os.environ["LLAMA3_PATH"] = "/nfs_beijing/wanghao/2025-onesystem/vllm/Meta-Llama-3-8B"
+            procyon_ckpt = '/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom/procyon/model_weights/ProCyon-Full'
+            self.esm_pretrain_model = AutoModelForMaskedLM.from_pretrained(f"{MODEL_ZOOM_PATH}/esm2_3b").to(self.device)
+            self.esm_pretrain_model.eval()
+            self.esm_tokenizer = AutoTokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/esm2_3b")
+
+            # Since the env problem of torchdrug, we load the structure embeddings instead of using GearNet to perfrom the online inference
+            with open(f"{MODEL_ZOOM_PATH}/../datasets/gearnet_features/gearnet_features.pkl", "rb") as file:
+                self.structure_embeddings = pickle.load(file)
+
+            # procyon initialization
+            self.pretrain_model, _ = UnifiedProCyon.from_pretrained(
+                pretrained_weights_dir=procyon_ckpt, 
+                checkpoint_dir=procyon_ckpt
+            )
+            self.pretrain_model = self.pretrain_model.to(self.device)
         elif self.pretrain_model_name == 'prollama':
-            pass
+            from transformers import LlamaForCausalLM, LlamaTokenizer
+            llama_path = "/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark_project/data/ProLLaMA"
+            self.pretrain_model = LlamaForCausalLM.from_pretrained(
+                llama_path,
+                # torch_dtype=torch.float16,
+                # low_cpu_mem_usage=True,
+                # device_map='auto',
+                quantization_config=None
+            ).to(self.device)
+            self.tokenizer = LlamaTokenizer.from_pretrained(llama_path)
         elif self.pretrain_model_name == 'progen2':
             from model_zoom.progen2.modeling_progen import ProGenForCausalLM
             from tokenizers import Tokenizer
@@ -79,7 +112,7 @@ class PretrainModelInterface(nn.Module):
         else:
             raise ValueError(f"Unknown pretrain model name: {self.pretrain_model_name}")
             
-    def construct_batch(self, data, batch_size):
+    def construct_batch(self, data, batch_size, task_name=None):
         """
         Constructs batches of data.
 
@@ -201,10 +234,66 @@ class PretrainModelInterface(nn.Module):
                 }
             
             if self.pretrain_model_name == 'procyon':
-                pass
+                name_batch, X_batch, S_batch, label_batch = [], [], [], []
+                for sample in data[i:i + batch_size]:
+                    seq = sample['seq']
+                    label = sample['label']
+                    uid = sample['unique_id']
+                    
+                    seq_token = torch.tensor(self.esm_tokenizer.encode(seq))
+                    seq_token = self.esm_tokenizer([seq], return_tensors="pt", padding=True, truncation=True)
+                    seq_embedding = self.esm_pretrain_model.esm(
+                        seq_token['input_ids'].to(self.device),
+                        attention_mask=seq_token['attention_mask'].to(self.device),
+                        return_dict=True,
+                    ).last_hidden_state.squeeze(0).mean(0).flatten()
+                    
+                    X = torch.tensor(
+                        self.structure_embeddings[task_name][uid]["graph_feature"]
+                    ).flatten()
+
+                    
+                    S_batch.append(seq_embedding)
+                    X_batch.append(X)
+                    label_batch.append(torch.tensor(label))
+                    name_batch.append(sample['name'])
+        
+                yield {
+                    'name': name_batch,
+                    'seq': torch.stack(S_batch).to(self.device),
+                    'X': torch.stack(X_batch).unsqueeze(1).to(self.device),
+                    'label': torch.stack(label_batch).to(self.device),
+                }
             
             if self.pretrain_model_name == 'prollama':
-                pass
+                name_batch, X_batch, S_batch, mask_batch, label_batch = [], [], [], [], []
+                for sample in data[i:i + batch_size]:
+                    seq = sample['seq']
+                    seq = f"[Determine superfamily] Seq=<{seq}>"
+                    label = sample['label']
+                    X = sample['X']
+
+                    attention_mask = torch.zeros(self.max_length)
+                    seq_token = torch.tensor(self.tokenizer.encode(seq))
+                    attention_mask[:len(seq_token)] = 1
+                    seq_token = self.pad_data(seq_token, dim=0)
+                    
+                    X = dynamic_pad(X, [1, 1], dim=0, pad_value=0)
+                    X = self.pad_data(X, dim=0)
+ 
+                    S_batch.append(seq_token)
+                    X_batch.append(X)
+                    mask_batch.append(attention_mask)
+                    label_batch.append(torch.tensor(label))
+                    name_batch.append(sample['name'])
+        
+                yield {
+                    'name': name_batch,
+                    'seq': torch.stack(S_batch).to(self.device),
+                    'X': torch.stack(X_batch).to(self.device),
+                    'attention_mask': torch.stack(mask_batch).to(self.device)==1,
+                    'label': torch.stack(label_batch).to(self.device),
+                }
             
             if self.pretrain_model_name == 'progen2':
                 name_batch, S_batch, mask_batch, label_batch = [], [], [], []
@@ -383,10 +472,37 @@ class PretrainModelInterface(nn.Module):
             embeddings = F.pad(embeddings, (0, 0, 0, self.max_length-embeddings.shape[1], 0, 0), value=0)
         
         if self.pretrain_model_name == 'procyon':
-            pass
-        
+            seq_embeddings = self.pretrain_model.token_projectors["aaseq"](
+                x["seq"]
+            )
+            struct_embeddings = self.pretrain_model.token_projectors["prot_structure"](
+                x["X"]
+            )
+            instructions = [
+                "Describe the following protein with features: <|protein|> <|struct|>"
+            ] * seq_embeddings.shape[0]
+            
+            input_ids, attn_masks = self.pretrain_model._prepare_text_inputs_and_tokenize(instructions, [[]] * seq_embeddings.shape[0], no_pad=True)
+            input_ids, attn_masks = input_ids.to(self.device), attn_masks.to(self.device)
+            input_embeds, ret_output_indices = self.pretrain_model._prepare_input_embeddings(
+                input_ids, 
+                protein_soft_tokens=seq_embeddings,
+                protein_struct_tokens=struct_embeddings
+            )
+            x["attention_mask"] = ~(input_ids == self.pretrain_model.tokenizer.pad_token_id)
+            outputs = self.pretrain_model.text_encoder(
+                input_embeds = input_embeds,
+                attn_masks = attn_masks,
+            )
+            embeddings = outputs.hidden_states[-1] # shape(b, 2048, 4096)
+
         if self.pretrain_model_name == 'prollama':
-            pass
+            out = self.pretrain_model(
+                input_ids = x["seq"],
+                attention_mask = x['attention_mask'],
+                output_hidden_states=True
+            )
+            embeddings = out.hidden_states[-1].float()
         
         if self.pretrain_model_name == 'progen2':
             transformer_outputs = self.pretrain_model.transformer(x['seq'], return_dict=True)
@@ -430,11 +546,12 @@ class PretrainModelInterface(nn.Module):
             data = data[start:start+self.max_length]
         return data
     
-    def inference_datasets(self, data):
+    def inference_datasets(self, data, task_name=None):
         self.pretrain_model.eval()
         with torch.no_grad():
             proccessed_data = []
-            for batch in self.construct_batch(data, self.batch_size):
+            for batch in tqdm(self.construct_batch(data, self.batch_size, task_name), desc='Extracting embeddings'):
+                # print('batch size:', len(batch['name']))
                 embeddings = self.forward(batch)
                 for i in range(len(batch['name'])):
                     proccessed_data.append({
