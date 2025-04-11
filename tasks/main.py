@@ -1,7 +1,7 @@
 import datetime
 import os
-import sys
-sys.path.append(os.getcwd())
+import sys; sys.path.append("/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark")
+# sys.path.append(os.getcwd())
 # os.environ["WANDB_API_KEY"] = "ddb1831ecbd2bf95c3323502ae17df6e1df44ec0" # gzy
 os.environ["WANDB_API_KEY"] = "ddb1831ecbd2bf95c3323502ae17df6e1df44ec0" # wh
 import warnings
@@ -20,17 +20,18 @@ from src.utils.logger import SetupCallback
 from src.utils.utils import flatten_dict
 import math
 import wandb
+from hydra import initialize, compose
 
 def eval_resolver(expr: str):
     return eval(expr, {}, {})
 
 OmegaConf.register_new_resolver("eval", eval_resolver, use_cache=False)
 
-CONFIG_NAME = os.getenv('CONFIG_NAME')
-GPUS_PER_NODE = int(os.getenv('GPUS_PER_NODE', '1'))
-NNODES = int(os.getenv('NNODES', '1'))
+# CONFIG_NAME = os.getenv('CONFIG_NAME')
+# GPUS_PER_NODE = int(os.getenv('GPUS_PER_NODE', '1'))
+# NNODES = int(os.getenv('NNODES', '1'))
 
-def create_parser(hydra_config=None):
+def create_parser():
     parser = argparse.ArgumentParser()
     
     # Set-up parameters
@@ -41,24 +42,37 @@ def create_parser(hydra_config=None):
     parser.add_argument('--seed', default=2024, type=int)
     
     parser.add_argument('--batch_size', default=32, type=int)
-    parser.add_argument('--pretrain_batch_size', default=32, type=int)
+    parser.add_argument('--pretrain_batch_size', default=16, type=int)
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--seq_len', default=1022, type=int)
+    parser.add_argument('--gpus_per_node', default=1, type=int)
+    parser.add_argument('--num_nodes', default=1, type=int)
     
     # Training parameters
-    parser.add_argument('--epoch', default=10, type=int, help='end epoch')
+    parser.add_argument('--epoch', default=100, type=int, help='end epoch')
     parser.add_argument('--lr', default=1e-4, type=float, help='Learning rate')
     parser.add_argument('--lr_scheduler', default='cosine')
     
     # Model parameters
-    parser.add_argument('--finetune_type', default='adpter', type=str)
-    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m'])
+    parser.add_argument('--finetune_type', default='adapter', type=str)
+    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'procyon', 'prollama'])
+    parser.add_argument("--config_name", type=str, default='fitness_prediction', help="Name of the Hydra config to use")
+    args = parser.parse_args()
+    
+    with initialize(config_path="configs"):
+        cfg: DictConfig = compose(config_name=args.config_name)
+    config_dict = flatten_dict(OmegaConf.to_container(cfg, resolve=True))
+    args_dict = vars(args)  # Namespace -> dict
 
-    # 使用 sys.argv 解析命令行参数，优先级高于 hydra 配置
-    args, unknown = parser.parse_known_args(args=sys.argv[1:], namespace=hydra_config)
+    # 合并，args 的值优先
+    merged_dict = {**config_dict, **args_dict}
+    args.__dict__ = merged_dict
+
+    # # 使用 sys.argv 解析命令行参数，优先级高于 hydra 配置
+    # args, unknown = parser.parse_known_args(args=sys.argv[1:], namespace=hydra_config)
     
     # 重新解析一次以确保控制台参数生效
-    args, unknown = parser.parse_known_args(namespace=args)
+    
 
     print(args)
     return args
@@ -117,10 +131,12 @@ def automl_setup(args, logger):
     return args, logger
     
 
-@hydra.main(version_base=None, config_path="configs", config_name=CONFIG_NAME)
-def main(cfg: DictConfig):
-    config_dict = OmegaConf.to_container(cfg, resolve=True)
-    args = create_parser(hydra_config=argparse.Namespace(**flatten_dict(config_dict)))
+# @hydra.main(version_base=None, config_path="configs", config_name=CONFIG_NAME)
+def main():
+    args = create_parser()
+    
+    # config_dict = OmegaConf.to_container(cfg, resolve=True)
+    # args = create_parser(hydra_config=argparse.Namespace(**flatten_dict(config_dict)))
     if args.offline:
         os.environ["WANDB_MODE"] = "offline"
     wandb.init(project='protein_benchmark', entity='biomap_ai')
@@ -148,9 +164,9 @@ def main(cfg: DictConfig):
     callbacks = load_callbacks(args)
     trainer_config = {
         "accelerator": "gpu",
-        'devices': int(GPUS_PER_NODE),  # Use all available GPUs
+        'devices': args.gpus_per_node,  # Use all available GPUs
         'max_epochs': args.epoch,  # Maximum number of epochs to train for
-        'num_nodes': int(NNODES),  # Number of nodes to use for distributed training
+        'num_nodes': args.num_nodes,  # Number of nodes to use for distributed training
         "strategy": 'deepspeed_stage_2', # 'ddp', 'deepspeed_stage_2
         "precision": 'bf16', # "bf16", 16
         'accelerator': 'gpu',  # Use distributed data parallel

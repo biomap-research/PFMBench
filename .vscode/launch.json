@@ -22,15 +22,16 @@
             "program": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/tasks/main.py",
             "console": "integratedTerminal",
             "justMyCode": true,
-            // "args": [
-            //     "--finetune_type", "lora",
-            // ],
+            "args": [
+                "--config_name", "fitness_prediction",
+                "--ex_name", "fitness_prediction",
+            ],
             "env": {
                 "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/",
                 "CUDA_VISIBLE_DEVICES": "2",
-                "CONFIG_NAME": "fitness_prediction",
-                "EXP_NAME": "fitness_prediction",
-                "OFFLINE": "1"
+                // "CONFIG_NAME": "fitness_prediction",
+                // "EXP_NAME": "fitness_prediction",
+                // "OFFLINE": "1"
             },
         },
     ]

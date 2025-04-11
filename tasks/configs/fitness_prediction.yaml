@@ -19,7 +19,7 @@ Training:
   seq_len: 1024
 
 Model:
-  pretrain_model_name: 'esm2_650m'
+  pretrain_model_name: 'prollama'
   finetune_type: 'adapter'
   lora_r: 8                  # 低秩矩阵的秩
   lora_alpha: 32             # LoRA 的 alpha 参数

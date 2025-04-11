@@ -39,7 +39,7 @@ class ProteinDataset(Dataset):
         for i in range(len(csv_data)):
             path_list.append((csv_data.iloc[i]['pdb_path'], csv_data.iloc[i]['label'], csv_data.iloc[i]['unique_id'])) #列表里面必须是元组，不然debug模式下并行加载数据会报错
         
-        # path_list = path_list[:1000]
+        # path_list = path_list[:32]
         self.data = pmap_multi(read_data, path_list)
         self.data = [d for d in self.data if d is not None]
         self.pretrain_model_interface = pretrain_model_interface
@@ -77,17 +77,17 @@ class ProteinDataset(Dataset):
             X = self.data[idx]['X']
             X = dynamic_pad(X, [1, 1], dim=0, pad_value=0)
             X = self.pad_data(X, dim=0)
-            if self.pretrain_model_name == 'prollama':
-                mask = torch.ones(self.max_length)
-                seq_token = torch.tensor(self.tokenizer.encode(seq))
-                mask[:len(seq_token)] = 0
-                seq_token = self.pad_data(seq_token, dim=0)
-                sample = {
-                    'seq': seq_token,
-                    'label': torch.tensor(label),
-                    'mask': mask,
-                    'coords': X,
-                }
+            # if self.pretrain_model_name == 'prollama':
+            mask = torch.ones(self.max_length)
+            seq_token = torch.tensor(self.tokenizer.encode(seq))
+            mask[:len(seq_token)] = 0
+            seq_token = self.pad_data(seq_token, dim=0)
+            sample = {
+                'seq': seq_token,
+                'label': torch.tensor(label),
+                'mask': mask,
+                'coords': X,
+            }
 
             return sample
 

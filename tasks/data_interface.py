@@ -1,10 +1,6 @@
 from torch.utils.data import DataLoader
 import torch
-import random
-import lmdb
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, DistributedSampler
-import torch.distributed as dist
 from src.interface.data_interface import DInterface_base
 from src.data.protein_dataset import ProteinDataset
 from src.model.pretrain_model_interface import PretrainModelInterface
