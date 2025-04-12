@@ -15,9 +15,10 @@ class PretrainModelInterface(nn.Module):
     Interface for pre-trained models.
     """
 
-    def __init__(self, pretrain_model_name, batch_size = 64, max_length = 1022, device = 'cuda'):
+    def __init__(self, pretrain_model_name, batch_size = 64, max_length = 1022, device = 'cuda', sequence_only=False):
         super(PretrainModelInterface, self).__init__()
         self.pretrain_model_name = pretrain_model_name
+        self.sequence_only = sequence_only
         self.batch_size = batch_size
         self.max_length = max_length
         self.device = device
@@ -126,18 +127,21 @@ class PretrainModelInterface(nn.Module):
         for i in range(0, len(data), batch_size):
             if self.pretrain_model_name == 'esm2_650m':
                 name_batch, X_batch, S_batch, mask_batch, label_batch = [], [], [], [], []
+                
+                max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])+2
+                    
                 for sample in data[i:i + batch_size]:
                     seq = sample['seq']
                     label = sample['label']
                     X = sample['X']
-                    attention_mask = torch.zeros(self.max_length)
+                    attention_mask = torch.zeros(max_length_batch)
                     
                     seq_token = torch.tensor(self.tokenizer.encode(seq))
                     attention_mask[:len(seq_token)] = 1
-                    seq_token = self.pad_data(seq_token, dim=0)
+                    seq_token = self.pad_data(seq_token, dim=0, max_length=max_length_batch)
                     
                     X = dynamic_pad(X, [1, 1], dim=0, pad_value=0)
-                    X = self.pad_data(X, dim=0)
+                    X = self.pad_data(X, dim=0, max_length=max_length_batch)
                     
                     
                     S_batch.append(seq_token)
@@ -198,7 +202,10 @@ class PretrainModelInterface(nn.Module):
                             constant_value=pad,
                         ).to(self.device)
                 
-                protein_tensor = _BatchedESMProteinTensor(sequence=sequence_tokens,
+                if self.sequence_only:
+                    protein_tensor = _BatchedESMProteinTensor(sequence=sequence_tokens, coordinates=coordinates_batch).to(self.device)
+                else:
+                    protein_tensor = _BatchedESMProteinTensor(sequence=sequence_tokens,
                                                           structure=structure_tokens_batch, coordinates=coordinates_batch).to(self.device)
 
                 yield {
@@ -266,6 +273,13 @@ class PretrainModelInterface(nn.Module):
                 }
             
             if self.pretrain_model_name == 'prollama':
+                max_length_batch = 0
+                for sample in data[i:i + batch_size]:
+                    seq = sample['seq']
+                    seq = f"[Determine superfamily] Seq=<{seq}>"
+                    seq_token = torch.tensor(self.tokenizer.encode(seq))
+                    max_length_batch = max(max_length_batch, len(seq_token))
+                    
                 name_batch, X_batch, S_batch, mask_batch, label_batch = [], [], [], [], []
                 for sample in data[i:i + batch_size]:
                     seq = sample['seq']
@@ -276,10 +290,10 @@ class PretrainModelInterface(nn.Module):
                     attention_mask = torch.zeros(self.max_length)
                     seq_token = torch.tensor(self.tokenizer.encode(seq))
                     attention_mask[:len(seq_token)] = 1
-                    seq_token = self.pad_data(seq_token, dim=0)
+                    seq_token = self.pad_data(seq_token, dim=0, max_length=max_length_batch)
                     
                     X = dynamic_pad(X, [1, 1], dim=0, pad_value=0)
-                    X = self.pad_data(X, dim=0)
+                    X = self.pad_data(X, dim=0, max_length=max_length_batch)
  
                     S_batch.append(seq_token)
                     X_batch.append(X)
@@ -295,7 +309,8 @@ class PretrainModelInterface(nn.Module):
                     'label': torch.stack(label_batch).to(self.device),
                 }
             
-            if self.pretrain_model_name == 'progen2':
+            if self.pretrain_model_name == 'progen2': # 没有BOS, EOS, 需要限制长度在1024以内
+                max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])
                 name_batch, S_batch, mask_batch, label_batch = [], [], [], []
                 for sample in data[i:i + batch_size]:
                     seq = sample['seq']
@@ -304,10 +319,11 @@ class PretrainModelInterface(nn.Module):
                     
                     seq_token = torch.tensor(self.tokenizer.encode(seq).ids)
                     attention_mask[:len(seq_token)] = 1
-                    seq_token = self.pad_data(seq_token, dim=0)
+                    seq_token = self.pad_data(seq_token, dim=0, max_length=max_length_batch)
+                    attention_mask = self.pad_data(attention_mask, dim=0, max_length=max_length_batch)
                     
-                    S_batch.append(seq_token)
-                    mask_batch.append(attention_mask)
+                    S_batch.append(seq_token[:1024])
+                    mask_batch.append(attention_mask[:1024])
                     label_batch.append(torch.tensor(label))
                     name_batch.append(sample['name'])
         
@@ -319,6 +335,7 @@ class PretrainModelInterface(nn.Module):
                 }
             
             if self.pretrain_model_name == 'prostt5':
+                max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])+2
                 import re
                 name_batch, struct_batch, S_batch, mask_batch, label_batch = [], [], [], [], []
                 for sample in data[i:i + batch_size]:
@@ -330,19 +347,28 @@ class PretrainModelInterface(nn.Module):
                     
                     states = self.encoder_3di.encode_atoms(ca = CA.numpy(), cb = CB.numpy(), n = N.numpy(), c = C.numpy())
                     struct_sequence = self.encoder_3di.build_sequence(states).lower()
-                    sequence_examples = [seq, struct_sequence]
-                    sequence_examples = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequence_examples]
-                    sequence_examples = [ "<AA2fold>" + " " + s if s.isupper() else "<fold2AA>" + " " + s # this expects 3Di sequences to be already lower-case
-                      for s in sequence_examples
-                    ]
                     
+                    if self.sequence_only:
+                        sequence_examples = [seq, seq]
+                        sequence_examples = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequence_examples]
+                        sequence_examples = [ "<AA2fold>" + " " + s if s.isupper() else "<fold2AA>" + " " + s # this expects 3Di sequences to be already lower-case
+                        for s in sequence_examples
+                        ]
+                    else:
+                        sequence_examples = [seq, struct_sequence]
+                        sequence_examples = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequence_examples]
+                        sequence_examples = [ "<AA2fold>" + " " + s if s.isupper() else "<fold2AA>" + " " + s # this expects 3Di sequences to be already lower-case
+                        for s in sequence_examples
+                        ]
+                        
                     seq_token = self.tokenizer.batch_encode_plus(sequence_examples,
                                   add_special_tokens=True,
                                   padding="longest",
                                   return_tensors='pt').to(self.device)
                     
                     attention_mask[:, :seq_token.input_ids.shape[1]] = 1
-                    seq_token = self.pad_data(seq_token.input_ids, dim=1)
+                    seq_token = self.pad_data(seq_token.input_ids, dim=1, max_length=max_length_batch)
+                    attention_mask = self.pad_data(attention_mask, dim=1, max_length=max_length_batch)
                     
                     
                     
@@ -358,7 +384,12 @@ class PretrainModelInterface(nn.Module):
                     'label': torch.stack(label_batch).to(self.device),
                 }
             
-            if self.pretrain_model_name == 'protgpt2':
+            if self.pretrain_model_name == 'protgpt2': # 没有BOS, EOS, 并且长度与氨基酸数量不一致
+                max_length_batch = 0
+                for sample in data[i:i + batch_size]:
+                    seq_token = torch.tensor(self.tokenizer.encode(sample['seq']))
+                    max_length_batch = max(max_length_batch, len(seq_token))
+                    
                 name_batch, S_batch, mask_batch, label_batch = [], [], [], []
                 for sample in data[i:i + batch_size]:
                     seq = sample['seq']
@@ -367,7 +398,8 @@ class PretrainModelInterface(nn.Module):
                     
                     seq_token = torch.tensor(self.tokenizer.encode(seq))
                     attention_mask[:len(seq_token)] = 1
-                    seq_token = self.pad_data(seq_token, dim=0)
+                    seq_token = self.pad_data(seq_token, dim=0, max_length=max_length_batch)
+                    attention_mask = self.pad_data(attention_mask, dim=0, max_length=max_length_batch)
                     
                     S_batch.append(seq_token)
                     mask_batch.append(attention_mask)
@@ -382,8 +414,10 @@ class PretrainModelInterface(nn.Module):
                 }
             
             if self.pretrain_model_name == 'protrek':
+                max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])+2
                 name_batch, struct_batch, seq_batch, label_batch = [], [], [], []
-                for sample in data[i:i + batch_size]:
+                attention_mask = torch.zeros(len(data[i:i + batch_size]), max_length_batch)
+                for idx, sample in enumerate(data[i:i + batch_size]):
                     seq = sample['seq']
                     X = sample['X']
                     N,  CA, C,  CB,  O = X[:, 0], X[:, 1], X[:, 2], X[:, 3], X[:, 4]
@@ -391,22 +425,26 @@ class PretrainModelInterface(nn.Module):
                     
                     states = self.encoder_3di.encode_atoms(ca = CA.numpy(), cb = CB.numpy(), n = N.numpy(), c = C.numpy())
                     struct_sequence = self.encoder_3di.build_sequence(states).lower()
+                    if self.sequence_only:
+                        struct_sequence = ''.join(['#' for one in struct_sequence])
+                    
+                    attention_mask[idx, :len(seq)+2] = 1
                     struct_batch.append(struct_sequence)
                     seq_batch.append(seq)
                 
                     label_batch.append(torch.tensor(label))
                     name_batch.append(sample['name'])
 
-                attention_mask = torch.ones(len(seq_batch), 2)==1
                 yield {
                     'name': name_batch,
                     'seq_batch': seq_batch,
                     'struct_batch': struct_batch,
-                    'attention_mask': attention_mask,
+                    'attention_mask': attention_mask==1,
                     'label': torch.stack(label_batch).to(self.device),
                 }
             
             if self.pretrain_model_name == 'saport':
+                max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])+2
                 name_batch, struct_batch, S_batch, mask_batch, label_batch = [], [], [], [], []
                 for sample in data[i:i + batch_size]:
                     seq = sample['seq']
@@ -417,12 +455,15 @@ class PretrainModelInterface(nn.Module):
                     
                     states = self.encoder_3di.encode_atoms(ca = CA.numpy(), cb = CB.numpy(), n = N.numpy(), c = C.numpy())
                     struct_sequence = self.encoder_3di.build_sequence(states).lower()
+                    if self.sequence_only:
+                        struct_sequence = ''.join(['#' for one in struct_sequence])
                     merged_seq = ''.join(a + b.lower() for a, b in zip(seq, struct_sequence))
                     
                     seq_token = self.tokenizer(merged_seq, return_tensors="pt").input_ids[0]
                     
                     attention_mask[:seq_token.shape[0]] = 1
-                    seq_token = self.pad_data(seq_token, dim=0)
+                    seq_token = self.pad_data(seq_token, dim=0, max_length=max_length_batch)
+                    attention_mask = self.pad_data(attention_mask, dim=0, max_length=max_length_batch)
                     
                     
                     
@@ -439,6 +480,7 @@ class PretrainModelInterface(nn.Module):
                 }
     
     def forward(self, x) -> torch.Tensor:
+        names, labels = x['name'], x['label']
         if self.pretrain_model_name == 'esm2_650m':
             # Forward pass through the pre-trained model
             outputs = self.pretrain_model.esm(
@@ -447,6 +489,9 @@ class PretrainModelInterface(nn.Module):
                         return_dict=True,
                     )
             embeddings = outputs.last_hidden_state
+            ends = x['attention_mask'].sum(dim=-1)
+            starts = torch.ones_like(ends)
+            attention_mask = x['attention_mask']
             
         if self.pretrain_model_name == 'esm3_1.4b':
             output = self.pretrain_model.logits(
@@ -462,16 +507,21 @@ class PretrainModelInterface(nn.Module):
                 ),
             )
             embeddings = output.embeddings
-            embeddings = F.pad(embeddings, (0, 0, 0, self.max_length-embeddings.shape[1], 0, 0), value=0)
+            ends = x['attention_mask'].sum(dim=-1)
+            starts = torch.ones_like(ends)
+            attention_mask = x['attention_mask']
+            # embeddings = F.pad(embeddings, (0, 0, 0, self.max_length-embeddings.shape[1], 0, 0), value=0)
         
         if self.pretrain_model_name == 'esmc_600m':
             logits_output = self.pretrain_model.logits(
             x['protein_tensor'], LogitsConfig(sequence=True, return_embeddings=True)
             )
+            attention_mask = x['attention_mask']
             embeddings = logits_output.embeddings
-            embeddings = F.pad(embeddings, (0, 0, 0, self.max_length-embeddings.shape[1], 0, 0), value=0)
+            ends = x['attention_mask'].sum(dim=-1)
+            starts = torch.ones_like(ends)
         
-        if self.pretrain_model_name == 'procyon':
+        if self.pretrain_model_name == 'procyon': # 长度和氨基酸数量不同
             seq_embeddings = self.pretrain_model.token_projectors["aaseq"](
                 x["seq"]
             )
@@ -484,29 +534,45 @@ class PretrainModelInterface(nn.Module):
             
             input_ids, attn_masks = self.pretrain_model._prepare_text_inputs_and_tokenize(instructions, [[]] * seq_embeddings.shape[0], no_pad=True)
             input_ids, attn_masks = input_ids.to(self.device), attn_masks.to(self.device)
-            input_embeds, ret_output_indices = self.pretrain_model._prepare_input_embeddings(
-                input_ids, 
-                protein_soft_tokens=seq_embeddings,
-                protein_struct_tokens=struct_embeddings
-            )
+            
+            if self.sequence_only:
+                input_embeds, ret_output_indices = self.pretrain_model._prepare_input_embeddings(
+                    input_ids, 
+                    protein_soft_tokens=seq_embeddings
+                )
+            else:
+                input_embeds, ret_output_indices = self.pretrain_model._prepare_input_embeddings(
+                    input_ids, 
+                    protein_soft_tokens=seq_embeddings,
+                    protein_struct_tokens=struct_embeddings
+                )
             x["attention_mask"] = ~(input_ids == self.pretrain_model.tokenizer.pad_token_id)
             outputs = self.pretrain_model.text_encoder(
                 input_embeds = input_embeds,
                 attn_masks = attn_masks,
             )
             embeddings = outputs.hidden_states[-1] # shape(b, 2048, 4096)
+            attention_mask = x['attention_mask']
+            ends = attention_mask.sum(dim=-1)
+            starts = torch.zeros_like(ends)
 
-        if self.pretrain_model_name == 'prollama':
+        if self.pretrain_model_name == 'prollama': # 长度和氨基酸数量不同
             out = self.pretrain_model(
                 input_ids = x["seq"],
                 attention_mask = x['attention_mask'],
                 output_hidden_states=True
             )
             embeddings = out.hidden_states[-1].float()
+            attention_mask = x['attention_mask']
+            ends = attention_mask.sum(dim=-1)
+            starts = torch.zeros_like(ends)
         
         if self.pretrain_model_name == 'progen2':
             transformer_outputs = self.pretrain_model.transformer(x['seq'], return_dict=True)
             embeddings = transformer_outputs[0]
+            attention_mask = x['attention_mask']
+            ends = attention_mask.sum(dim=-1)+1
+            starts = torch.zeros_like(ends)
 
         if self.pretrain_model_name == 'prostt5':
             embedding_repr = self.pretrain_model(
@@ -516,15 +582,24 @@ class PretrainModelInterface(nn.Module):
             embeddings = embedding_repr.last_hidden_state
             embeddings = embeddings.reshape(embeddings.shape[0]//2, 2, embeddings.shape[1], embeddings.shape[2])
             embeddings = torch.cat([embeddings[:,0], embeddings[:,1]], dim=-1)
+            attention_mask = x['attention_mask'][::2]
+            ends = attention_mask.sum(dim=-1)
+            starts = torch.ones_like(ends)
         
         if self.pretrain_model_name == 'protgpt2':
             outputs = self.pretrain_model.transformer(x['seq'])
             embeddings = outputs.last_hidden_state
-        
+            attention_mask = x['attention_mask']
+            ends = attention_mask.sum(dim=-1)
+            starts = torch.ones_like(ends)
+    
         if self.pretrain_model_name == 'protrek':
             seq_embedding = self.pretrain_model.get_protein_repr(x['seq_batch'])
             struc_embedding = self.pretrain_model.get_structure_repr(x['struct_batch'])
-            embeddings = torch.stack([seq_embedding, struc_embedding], dim=1)
+            embeddings = torch.cat([seq_embedding, struc_embedding], dim=-1)
+            attention_mask = x['attention_mask']
+            ends = attention_mask.sum(dim=-1)
+            starts = torch.ones_like(ends)
         
         if self.pretrain_model_name == 'saport':
             outputs = self.pretrain_model.esm(
@@ -533,17 +608,33 @@ class PretrainModelInterface(nn.Module):
                         return_dict=True,
                     )
             embeddings = outputs.last_hidden_state
+            attention_mask = x['attention_mask']
+            ends = attention_mask.sum(dim=-1)
+            starts = torch.ones_like(ends)
         
-        
-        return embeddings
+        # 这个embedding 是[B,L,D]的形式, L是氨基酸数量, 但对于语言模型老师, L这个维度可能不刚好等于氨基酸数量，无法用于氨基酸级别的预测任务。另外，有些方法会加上[EOS, BOS]，有些又不需要，最好是在最后的embedding上统一去除[EOS, BOS]
+        return self.post_process(names, labels, embeddings, attention_mask, starts, ends)
     
+    def post_process(self, names, labels, embeddings, attention_mask, starts, ends):
+        results = []
+        for i, end in enumerate(ends):
+            start = starts[i]
+            results.append( 
+                            {'name': names[i],
+                            'embedding': self.pad_data(embeddings[i,start:end], dim=0, max_length=self.max_length).cpu(),
+                            'attention_mask': self.pad_data(attention_mask[i,start:end], dim=0, max_length=self.max_length).cpu(),
+                            'label': labels[i].cpu()}
+            )
+        return results
+
     
-    def pad_data(self, data, dim=0, pad_value=0):
-        if data.shape[dim] < self.max_length:
-            data = dynamic_pad(data, [0, self.max_length-data.shape[dim]], dim=dim, pad_value=pad_value)
+    def pad_data(self, data, dim=0, pad_value=0, max_length=1022):
+        if data.shape[dim] < max_length:
+            data = dynamic_pad(data, [0, max_length-data.shape[dim]], dim=dim, pad_value=pad_value)
         else:
-            start = torch.randint(0, data.shape[0]-self.max_length+1, (1,)).item()
-            data = data[start:start+self.max_length]
+            # start = torch.randint(0, data.shape[0]-self.max_length+1, (1,)).item()
+            start = 0
+            data = data[start:start+max_length]
         return data
     
     def inference_datasets(self, data, task_name=None):
@@ -552,14 +643,15 @@ class PretrainModelInterface(nn.Module):
             proccessed_data = []
             for batch in tqdm(self.construct_batch(data, self.batch_size, task_name), desc='Extracting embeddings'):
                 # print('batch size:', len(batch['name']))
-                embeddings = self.forward(batch)
-                for i in range(len(batch['name'])):
-                    proccessed_data.append({
-                        'name': batch['name'][i],
-                        'attention_mask': batch['attention_mask'][i].cpu(),
-                        'label': batch['label'][i].cpu(),
-                        'embedding': embeddings[i].cpu()
-                    })
+                results = self.forward(batch)
+                proccessed_data.extend(results)
+                # for i in range(len(batch['name'])):
+                #     proccessed_data.append({
+                #         'name': batch['name'][i],
+                #         'attention_mask': result['attention_mask'][i].cpu(),
+                #         'label': batch['label'][i].cpu(),
+                #         'embedding': result['embeddings'][i].cpu()
+                #     })
         return proccessed_data
             
 

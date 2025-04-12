@@ -36,13 +36,13 @@ def create_parser():
     
     # Set-up parameters
     parser.add_argument('--res_dir', default='./results', type=str)
-    parser.add_argument('--ex_name', default='debug', type=str)
+    # parser.add_argument('--ex_name', default='debug', type=str)
     parser.add_argument('--check_val_every_n_epoch', default=1, type=int)
     parser.add_argument('--offline', default=1, type=int)
     parser.add_argument('--seed', default=2024, type=int)
     
     parser.add_argument('--batch_size', default=32, type=int)
-    parser.add_argument('--pretrain_batch_size', default=16, type=int)
+    parser.add_argument('--pretrain_batch_size', default=4, type=int)
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--seq_len', default=1022, type=int)
     parser.add_argument('--gpus_per_node', default=1, type=int)
@@ -54,8 +54,9 @@ def create_parser():
     parser.add_argument('--lr_scheduler', default='cosine')
     
     # Model parameters
+    parser.add_argument('--sequence_only', default=0, type=int)
     parser.add_argument('--finetune_type', default='adapter', type=str)
-    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'procyon', 'prollama'])
+    parser.add_argument('--pretrain_model_name', default='protrek', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport'])
     parser.add_argument("--config_name", type=str, default='fitness_prediction', help="Name of the Hydra config to use")
     args = parser.parse_args()
     

@@ -1,6 +1,6 @@
 Output:
   res_dir: "tasks/results/fold_prediction"
-  ex_name: ${oc.env:EXP_NAME, 'default'}
+  ex_name: "fold_prediction_adapter"
   offline: ${eval:"int(${oc.env:OFFLINE, '1'})"}
 
 Data:
@@ -9,7 +9,7 @@ Data:
   test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/fold_prediction/fold_prediction_with_glmfold_structure_test.csv"
 
 Training:
-  epoch: 20  # end epoch
+  epoch: 50  # end epoch
   lr: 1e-4  # Learning rate
   lr_scheduler: "cosine"
   check_val_every_n_epoch: 1

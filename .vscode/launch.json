@@ -23,8 +23,7 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--config_name", "fitness_prediction",
-                "--ex_name", "fitness_prediction",
+                "--config_name", "fold_prediction",
             ],
             "env": {
                 "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/",

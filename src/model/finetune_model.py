@@ -40,7 +40,7 @@ class UniModel(nn.Module):
                 self.proj = nn.Linear(1280, hid_dim)
             
             if pretrain_model_name == 'protrek':
-                self.proj = nn.Linear(1024, hid_dim)
+                self.proj = nn.Linear(1920, hid_dim)
             
             if pretrain_model_name == 'saport':
                 self.proj = nn.Linear(1280, hid_dim)
