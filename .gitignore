@@ -35,3 +35,4 @@ datasets/
 *.log
 results/
 *.pdb
+*.pickle

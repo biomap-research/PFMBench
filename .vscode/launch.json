@@ -10,6 +10,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
+            "justMyCode": false,
             "env": {
                 "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark",
                 "CUDA_VISIBLE_DEVICES": "0",
@@ -23,7 +24,7 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--config_name", "fold_prediction",
+                "--config_name", "contact_map",
             ],
             "env": {
                 "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/",

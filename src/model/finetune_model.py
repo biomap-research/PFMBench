@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoModelForMaskedLM
-from peft import LoraConfig, TaskType, get_peft_model
+# from peft import LoraConfig, TaskType, get_peft_model
 
 
 class UniModel(nn.Module):
@@ -22,34 +22,52 @@ class UniModel(nn.Module):
         hid_dim = 480
         if finetune_type == 'adapter':
             if pretrain_model_name == 'esm2_650m':
-                self.proj = nn.Linear(1280, hid_dim)
+                self.input_dim = 1280
             
             if pretrain_model_name == 'esm3_1.4b':
-                self.proj = nn.Linear(1536, hid_dim)
+                self.input_dim = 1536
             
             if pretrain_model_name == 'esmc_600m':
-                self.proj = nn.Linear(1152, hid_dim)
+                self.input_dim = 1152
             
             if pretrain_model_name == 'progen2':
-                self.proj = nn.Linear(1536, hid_dim)
+                self.input_dim = 1536
             
             if pretrain_model_name == 'prostt5':
-                self.proj = nn.Linear(2048, hid_dim)
+                self.input_dim = 2048
             
             if pretrain_model_name == 'protgpt2':
-                self.proj = nn.Linear(1280, hid_dim)
+                self.input_dim = 1280
             
             if pretrain_model_name == 'protrek':
-                self.proj = nn.Linear(1920, hid_dim)
+                self.input_dim = 1920
             
             if pretrain_model_name == 'saport':
-                self.proj = nn.Linear(1280, hid_dim)
+                self.input_dim = 1280
 
             if pretrain_model_name == 'procyon':
-                self.proj = nn.Linear(4096, hid_dim)
+                self.input_dim = 4096
 
             if pretrain_model_name == 'prollama':
-                self.proj = nn.Linear(4096, hid_dim)
+                self.input_dim = 4096
+            
+            if pretrain_model_name == 'prost':
+                self.input_dim = 512
+            
+            if pretrain_model_name == 'gearnet':
+                self.input_dim = 3072
+            
+            if pretrain_model_name == 'venusplm':
+                self.input_dim = 1024
+
+            if pretrain_model_name == 'prosst2048':
+                self.input_dim = 768
+
+            if "pair" in self.task_type:
+                self.input_dim *= 2
+
+            self.proj = nn.Sequential(nn.Linear(self.input_dim, hid_dim),
+                                      nn.LayerNorm(hid_dim))
             
             self.adapter = TransformerAdapter(
                     input_dim=hid_dim,               # 输入维度
@@ -115,8 +133,19 @@ class UniModel(nn.Module):
         if task_type == 'regression':
             self.task_head = nn.Sequential(nn.Linear(hid_dim, 1),
                                            nn.Flatten(start_dim=0, end_dim=1))
-            
             self.loss = nn.MSELoss()
+        
+        if task_type == 'contact':
+            self.task_head = ContactPredictionHead(hid_dim)
+            self.loss = ContatcLoss()
+        
+        if task_type in [
+            'binary_classification', 
+            'pair_binary_classification',
+            'multi_labels_classification',
+        ]:
+            self.task_head = nn.Linear(hid_dim, num_classes)
+            self.loss = nn.BCEWithLogitsLoss()
     
     def forward(self, batch):
         if self.finetune_type == 'adapter':
@@ -127,7 +156,11 @@ class UniModel(nn.Module):
             pooled_output = torch.mean(proj_output, dim=1)
             logits = self.task_head(pooled_output)
             if labels is not None:
-                loss = self.loss(logits, labels)
+                if isinstance(self.loss, nn.BCEWithLogitsLoss):
+                    labels = labels.float()
+                    if labels.ndim == 1:
+                        labels = labels.unsqueeze(1)
+                loss = self.loss(logits.float(), labels)
                 return {'loss': loss, 'logits': logits}
             else:
                 return {'logits': logits}
@@ -207,3 +240,115 @@ class TransformerAdapter(nn.Module):
         
         return output
 
+class ContactPredictionHead(nn.Module):
+    def __init__(self, hidden_size):
+        super().__init__()
+        hidden_size *= 2
+        self.activation_func = nn.functional.relu 
+        last_size = hidden_size
+        self.layers = torch.nn.ModuleList()
+        self.final_activation = torch.nn.Sigmoid()
+        for sz in [128, 1]:
+            this_layer = torch.nn.Linear(last_size, sz, bias=True)
+            last_size = sz
+            torch.nn.init.kaiming_uniform_(this_layer.weight, nonlinearity='relu')
+            torch.nn.init.zeros_(this_layer.bias)
+            self.layers.append(this_layer)
+
+    def outer_concat(self, x):
+        x = x.permute(1, 0)
+        x_1 = x[None, :, :, None]
+        x_2 = x[None, :, None, :]
+        x_1 = x_1.repeat(1, 1, 1,  x.shape[1])
+        x_2 = x_2.repeat(1, 1, x.shape[1],  1)
+        x = torch.cat((x_1, x_2), dim=1)
+        I, J = torch.tril_indices(x.shape[-1], x.shape[-1], -1)
+        x[:, :, I, J] = x[:, :, J, I]                # symmetrization
+        return x.permute(0,2,3,1).contiguous()
+
+    def forward(self, embeddings, **kwargs):
+        results = embeddings['wt']
+        if isinstance(results, tuple) or isinstance(results, list):
+            logits, *_ = results
+        else:
+            logits = results
+        logits = logits.squeeze(0)
+        logits = self.outer_concat(logits)
+        for i, layer in enumerate(self.layers):
+            if i > 0:
+                logits = self.activation_func(logits)
+            logits = layer(logits)
+        logits.unsqueeze(0)
+        return logits
+
+
+class ContatcLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, logits, labels, **kwargs):
+        pred = logits.contiguous().float().squeeze(0)
+        labels[labels>0] = -1
+        labels[labels==0] = 1
+        labels[labels==-1] = 0
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(
+            pred.view(-1).contiguous(),
+            labels.view(-1).contiguous().float()
+        )
+        pred = pred.view(-1)
+        labels = labels.view(-1)
+        return {"loss": loss}
+
+def metric_eval(pred_y, y, inds, ls, lens):
+    tests = []
+    t_y = []
+    rs = []
+    for idx in inds:
+        row = idx // lens
+        col = idx % lens
+        if row >= col:
+            continue
+        if abs(row - col) <= 6:
+            continue
+        p = pred_y[idx]
+        gt = y[idx]
+        tests.append((p,gt))
+        if len(tests)>=ls:
+            break
+    cnt = 0
+    for p, gt in tests:
+        if gt == 1:
+            cnt += 1
+    return cnt, ls, cnt/ls
+
+def contact_metrics(preds, labels, attn_masks):
+    '''
+    pred, label: [B, L,L]
+    '''
+    total_acc = 0
+    valid_samples = 0
+    for b in range(preds.shape[0]):
+        pred = preds[b]
+        label = labels[b]
+        mask = attn_masks[b]
+        valid_idx = mask.nonzero(as_tuple=True)[0]
+        length = len(valid_idx)
+
+        if length < 2:
+            continue  # skip too-short sequences
+
+        pred = preds[b][valid_idx][:, valid_idx]  # shape [L', L']
+        label = labels[b][valid_idx][:, valid_idx]
+        
+        
+        label[label>0] = -1
+        label[label==0] = 1
+        label[label==-1] = 0
+        pred = pred.view(-1)
+        label = label.view(-1)
+        indices = torch.argsort(-pred)
+        l = label.shape[-1]
+        _,_, acc = metric_eval(pred, label, indices, l//5, l)
+        total_acc += acc
+        alid_samples += 1
+    return {"Top(L/5)": total_acc / valid_samples if valid_samples > 0 else 0.0}

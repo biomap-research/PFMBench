@@ -49,32 +49,55 @@ def create_parser():
     parser.add_argument('--num_nodes', default=1, type=int)
     
     # Training parameters
-    parser.add_argument('--epoch', default=100, type=int, help='end epoch')
+    parser.add_argument('--epoch', default=50, type=int, help='end epoch')
     parser.add_argument('--lr', default=1e-4, type=float, help='Learning rate')
     parser.add_argument('--lr_scheduler', default='cosine')
     
     # Model parameters
     parser.add_argument('--sequence_only', default=0, type=int)
     parser.add_argument('--finetune_type', default='adapter', type=str)
-    parser.add_argument('--pretrain_model_name', default='protrek', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport'])
+    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm'])
     parser.add_argument("--config_name", type=str, default='fitness_prediction', help="Name of the Hydra config to use")
+    # ----------------------------------------------------------------------------
+    # 1) 先不看命令行，拿到纯“parser 默认值”：
+    defaults = parser.parse_args([])
+    defaults_dict = vars(defaults)
+
+    # 2) 真正去解析一次命令行（CLI + 默认）：
     args = parser.parse_args()
-    
+    args_dict = vars(args)
+
+    # 3) 再读你的 Hydra config，平展开成普通 dict：
     with initialize(config_path="configs"):
         cfg: DictConfig = compose(config_name=args.config_name)
     config_dict = flatten_dict(OmegaConf.to_container(cfg, resolve=True))
-    args_dict = vars(args)  # Namespace -> dict
 
-    # 合并，args 的值优先
-    merged_dict = {**config_dict, **args_dict}
-    args.__dict__ = merged_dict
+    # ----------------------------------------------------------------------------
+    # 4) 挖出哪些 key 的值是“真由用户在命令行里指定”的：
+    passed = set()
+    for tok in sys.argv[1:]:
+        if not tok.startswith('--'):
+            continue
+        # 支持 --foo=bar 和 --foo bar 两种写法
+        key = tok.lstrip('-').split('=')[0].replace('-', '_')
+        passed.add(key)
 
-    # # 使用 sys.argv 解析命令行参数，优先级高于 hydra 配置
-    # args, unknown = parser.parse_known_args(args=sys.argv[1:], namespace=hydra_config)
+    # 5) 最终合并：CLI > config_file > parser_default
+    merged = {}
+    for key in set(list(defaults_dict.keys())+list(config_dict.keys())):
+        if key in passed:
+            # 用户显式传进来的
+            merged[key] = args_dict[key]
+        elif key in config_dict:
+            # config 文件里有，且用户没在 CLI 指定，就用它
+            merged[key] = config_dict[key]
+        else:
+            # 都没有指定，就退回 parser 默认
+            merged[key] = defaults_dict[key]
+
+    # 用合并后的结果更新 args Namespace
+    args.__dict__.update(merged)
     
-    # 重新解析一次以确保控制台参数生效
-    
-
     print(args)
     return args
 
@@ -92,7 +115,7 @@ def load_callbacks(args):
     callbacks.append(plc.ModelCheckpoint(
         monitor=metric,
         filename=sv_filename,
-        save_top_k=15,
+        save_top_k=3,
         mode='min',
         save_last=True,
         dirpath = ckptdir,

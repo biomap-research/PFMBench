@@ -11,14 +11,7 @@ from sklearn.preprocessing import MultiLabelBinarizer
 
 def read_data(pdb_path, label, unique_id, task_type, num_classes):
     try:
-        if task_type == "multi_labels_classification":
-            mlb = MultiLabelBinarizer(classes=range(int(num_classes)))
-            label = str(label)
-            label = mlb.fit_transform([[int(ele) for ele in label.split(",")]]).flatten().tolist()
-        
-        if task_type == "contact":
-            label = torch.load(label)
-            
+        label = torch.load(label)
         name = str(hash(pdb_path))
         # 解析 pdb 文件，unique_id 作为结构的 id
         if "|" not in pdb_path:
@@ -31,8 +24,6 @@ def read_data(pdb_path, label, unique_id, task_type, num_classes):
                 'unique_id': unique_id, 
                 'pdb_path': pdb_path
             }
-        # X, C, S = structure.to_XCS(all_atom=True)
-        # X, C, S = X[0], C[0], S[0]
         else:
             sequences, structures, lengths = [], [], []
             for _pdb_path in pdb_path.split("|"):
@@ -53,7 +44,7 @@ def read_data(pdb_path, label, unique_id, task_type, num_classes):
         return None
 
 
-class ProteinDataset(Dataset):
+class ContactDataset(Dataset):
     def __init__(self, csv_file, pretrain_model_name='esm2_650m', max_length=1022, pretrain_model_interface=None, task_name='pretrain', task_type='classification', num_classes=None):
         """
         Args:
@@ -72,8 +63,8 @@ class ProteinDataset(Dataset):
         for i in range(len(csv_data)):
             path_list.append((csv_data.iloc[i]['pdb_path'], csv_data.iloc[i]['label'], csv_data.iloc[i]['unique_id'], task_type, num_classes)) #列表里面必须是元组，不然debug模式下并行加载数据会报错
         
-        path_list = path_list[:50] # this is for fast debug, please comment it in production
-        self.data = pmap_multi(read_data, path_list, n_jobs=None)
+        path_list = path_list[:100]  # 仅用于测试，实际使用时可以去掉这一行
+        self.data = pmap_multi(read_data, path_list, n_jobs=1)
         self.data = [d for d in self.data if d is not None]
         self.pretrain_model_interface = pretrain_model_interface
 
@@ -99,11 +90,7 @@ class ProteinDataset(Dataset):
             name = self.data[idx]['name']
             embedding = self.pad_data(self.data[idx]['embedding'], dim=0, pad_value=0, max_length=self.max_length)
             attention_mask = self.pad_data(self.data[idx]['attention_mask'], dim=0, pad_value=0, max_length=self.max_length)
-            label = self.data[idx]['label']
-            if self.task_type == 'binary_classification':
-                label = label[None].float()
-            # elif self.task_type == 'contact':
-            #     label = F.pad(label, [0, self.max_length-label.shape[0],0, self.max_length-label.shape[0]])
+            label = F.pad(label, [0, self.max_length-label.shape[0],0, self.max_length-label.shape[0]])
             return {
                 'name': name,
                 'embedding': embedding,
@@ -116,7 +103,8 @@ class ProteinDataset(Dataset):
             X = self.data[idx]['X']
             # X = dynamic_pad(X, [1, 1], dim=0, pad_value=0) ## todo, 这里需要根据实际情况进行修改, 如果sequence tokenizer对数据加上了EOS, BOS，则需要这一行
             X = self.pad_data(X, dim=0)
-            # if self.pretrain_model_name == 'prollama':
+            label = F.pad(label, [0, self.max_length-label.shape[0],0, self.max_length-label.shape[0]])
+
             mask = torch.ones(self.max_length)
             seq_token = torch.tensor(self.tokenizer.encode(seq))
             mask[:len(seq_token)] = 0
@@ -150,7 +138,7 @@ def dynamic_pad(tensor, pad_size, dim=0, pad_value=0):
 
 # 示例用法
 if __name__ == "__main__":
-    dataset = ProteinDataset("/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/fold_prediction/fold_prediction_with_glmfold_structure_test.csv")
+    dataset = ContactDataset("/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/contact_prediction_binary/contact_prediction_binary_train.csv")
     sample = dataset[0]
     print(sample['coords'].shape)
     print(sample['chain'])

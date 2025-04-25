@@ -4,9 +4,9 @@ Output:
   offline: ${eval:"int(${oc.env:OFFLINE, '1'})"}
 
 Data:
-  train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/fold_prediction/fold_prediction_with_glmfold_structure_train.csv"
-  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/fold_prediction/fold_prediction_with_glmfold_structure_val.csv"
-  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/fold_prediction/fold_prediction_with_glmfold_structure_test.csv"
+  train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/fold_prediction/mmseq_outdir/train.csv"
+  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/fold_prediction/mmseq_outdir/val.csv"
+  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/fold_prediction/mmseq_outdir/test.csv"
 
 Training:
   epoch: 50  # end epoch
@@ -19,7 +19,7 @@ Training:
   seq_len: 1024
 
 Model:
-  pretrain_model_name: 'esm2_650m'
+  pretrain_model_name: 'saport'
   finetune_type: 'adapter'
   lora_r: 8                  # 低秩矩阵的秩
   lora_alpha: 32             # LoRA 的 alpha 参数

@@ -1,0 +1,36 @@
+{
+    "exclude": [
+      "**/__pycache__",
+      "**/build",
+      "**/dist",
+      "**/*.egg-info",
+      "**/*.so",
+      "**/*.swp",
+      "**/.kube",
+      "**/tmp",
+      "**/ds-configs",
+      "**/wandb",
+      "**/logs",
+      "**/bookcorpus_data",
+    //   "**/model_zoom",
+      "**/N128",
+      "**/old-sota-yamls",
+      "**/outputs",
+      "**/datasets",
+      "**/results",
+      "**/*.log",
+      "**/*.pdb",
+      "**/slurm*",
+      "**/.coverage_*",
+      "**/events.out.tfevents.*",
+      "**/*~"
+    ],
+    "include": ["."],
+    "pythonVersion": "3.11",
+    "typeCheckingMode": "basic",
+    "reportAttributeAccessIssue": false,
+    "reportOptionalCall": false,
+    "reportOptionalMemberAccess": false,
+    "reportArgumentType": false
+  }
+  

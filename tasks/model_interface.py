@@ -1,9 +1,13 @@
 import os
 import numpy as np
+import torch
 import torch.nn.functional as F
 from src.interface.model_interface import MInterface_base
 from src.model.finetune_model import UniModel
 from scipy.stats import spearmanr
+from sklearn.metrics import roc_auc_score, f1_score
+from sklearn.preprocessing import binarize
+from src.utils.metrics import f1_score_max
 
 class MInterface(MInterface_base):
     def __init__(self, model_name=None, loss=None, lr=None, **kargs):
@@ -13,11 +17,13 @@ class MInterface(MInterface_base):
         self._context = {
             "validation": {
                 "logits": [],
-                "labels": []
+                "labels": [],
+                "attn_mask": []
             },
             "test": {
                 "logits": [],
-                "labels": []
+                "labels": [],
+                "attn_mask": []
             }
         }
         os.makedirs(os.path.join(self.hparams.res_dir, self.hparams.ex_name), exist_ok=True)
@@ -38,6 +44,7 @@ class MInterface(MInterface_base):
         log_dict = {'val_loss': loss}
         self._context["validation"]["logits"].append(ret['logits'].float().cpu().numpy())
         self._context["validation"]["labels"].append(batch['label'].float().cpu().numpy())
+        self._context["validation"]["attn_mask"].append(batch['mask'].float().cpu().numpy())
 
         self.log_dict(log_dict)
         return self.log_dict
@@ -49,10 +56,12 @@ class MInterface(MInterface_base):
         metric = self.metrics(
             self._context["validation"]["logits"], 
             self._context["validation"]["labels"],
+            self._context["validation"]["attn_mask"],
             name="valid"
         )
         self._context["validation"]["logits"] = []
         self._context["validation"]["labels"] = []
+        self._context["validation"]["attn_mask"] = []
         self.log_dict(metric)
         return self.log_dict
    
@@ -62,9 +71,7 @@ class MInterface(MInterface_base):
         log_dict = {'test_loss': loss}
         self._context["test"]["logits"].append(ret['logits'].float().cpu().numpy())
         self._context["test"]["labels"].append(batch['label'].float().cpu().numpy())
-        # metric = self.metrics(ret['logits'], batch['label'])
-        # log_dict.update(metric)
-        # self.log_dict({"test_acc": metric})
+        self._context["test"]["attn_mask"].append(batch['mask'].float().cpu().numpy())
         return self.log_dict
 
     def on_test_epoch_end(self):
@@ -74,27 +81,39 @@ class MInterface(MInterface_base):
         metric = self.metrics(
             self._context["test"]["logits"], 
             self._context["test"]["labels"],
+            self._context["test"]["attn_mask"],
             name="test"
         )
         self._context["test"]["logits"] = []
         self._context["test"]["labels"] = []
+        self._context["test"]["attn_mask"] = []
         self.log_dict(metric)
         return self.log_dict
 
     def load_model(self):
-        self.model = UniModel(self.hparams.pretrain_model_name, self.hparams.task_type,  self.hparams.finetune_type, self.hparams.num_classes, self.hparams.lora_r, self.hparams.lora_alpha, self.hparams.lora_dropout)
+        self.model = UniModel(self.hparams.pretrain_model_name, self.hparams.task_type, self.hparams.finetune_type, self.hparams.num_classes, self.hparams.lora_r, self.hparams.lora_alpha, self.hparams.lora_dropout)
     
-    def metrics(self, preds, target, name):
+    def metrics(self, preds, target, attn_mask, name):
         if self.hparams.task_type == "classification":
             preds, target = np.vstack(preds), np.hstack(target) 
-            if self.hparams.task_name == 'fold_prediction':
-                preds = np.argmax(preds, axis=-1)
-                acc = (preds == target).mean()
-                return {f"{name}_acc": acc}
+            preds = np.argmax(preds, axis=-1)
+            acc = (preds == target).mean()
+            return {f"{name}_acc": acc}
+        elif self.hparams.task_type in ["binary_classification", "pair_binary_classification"]:
+            preds, target = np.vstack(preds), np.hstack(target) 
+            auroc = roc_auc_score(target, preds)
+            return {f"{name}_auroc": auroc}
         elif self.hparams.task_type == "regression":
             preds, target = np.hstack(preds), np.hstack(target) 
-            if self.hparams.task_name == 'fitness_prediction':
-                return {f"{name}_spearman": spearmanr(target, preds).statistic}
+            return {f"{name}_spearman": spearmanr(target, preds).statistic}
+        elif self.hparams.task_type == "multi_labels_classification":
+            preds, target = np.vstack(preds), np.vstack(target) 
+            f1_max = f1_score_max(torch.tensor(preds), torch.tensor(target)).item()
+            return {f"{name}_f1_max": f1_max}
+        elif self.hparams.task_type == "contact":
+            from src.model.finetune_model import contact_metrics
+            metrics = contact_metrics(preds, target, attn_mask)
+            return {f"{name}_Top(L/5)": metrics['Top(L/5)']}
 
     def on_save_checkpoint(self, checkpoint):
         state = checkpoint["state_dict"]
