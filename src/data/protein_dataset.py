@@ -9,7 +9,7 @@ from src.data.esm.sdk.api import ESMProtein
 from sklearn.preprocessing import MultiLabelBinarizer
 
 
-def read_data(pdb_path, label, unique_id, task_type, num_classes):
+def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles):
     try:
         if task_type == "multi_labels_classification":
             mlb = MultiLabelBinarizer(classes=range(int(num_classes)))
@@ -20,34 +20,47 @@ def read_data(pdb_path, label, unique_id, task_type, num_classes):
             label = torch.load(label)
             
         name = str(hash(pdb_path))
-        # 解析 pdb 文件，unique_id 作为结构的 id
-        if "|" not in pdb_path:
-            structure = ESMProtein.from_pdb(pdb_path)
-            return {
-                'name':name, 
-                'seq': structure.sequence, 
-                'X': structure.coordinates, 
-                'label': label, 
-                'unique_id': unique_id, 
-                'pdb_path': pdb_path
-            }
-        # X, C, S = structure.to_XCS(all_atom=True)
-        # X, C, S = X[0], C[0], S[0]
+        if pdb_path is not None:
+            # 解析 pdb 文件，unique_id 作为结构的 id
+            if "|" not in pdb_path:
+                structure = ESMProtein.from_pdb(pdb_path)
+                return {
+                    'name':name, 
+                    'seq': structure.sequence, 
+                    'X': structure.coordinates, 
+                    'label': label, 
+                    'unique_id': unique_id, 
+                    'pdb_path': pdb_path,
+                    'smiles': smiles
+                }
+            # X, C, S = structure.to_XCS(all_atom=True)
+            # X, C, S = X[0], C[0], S[0]
+            else:
+                sequences, structures, lengths = [], [], []
+                for _pdb_path in pdb_path.split("|"):
+                    structure = ESMProtein.from_pdb(_pdb_path)
+                    sequences.append(structure.sequence)
+                    structures.append(structure.coordinates)
+                    lengths.append(len(structure.sequence))
+                return {
+                    'name':name, 
+                    'seq': sequences, 
+                    'X': structures, 
+                    'label': label, 
+                    'unique_id': unique_id, 
+                    'length': lengths,
+                    'pdb_path': pdb_path.split("|"),
+                    'smiles': smiles
+                }
         else:
-            sequences, structures, lengths = [], [], []
-            for _pdb_path in pdb_path.split("|"):
-                structure = ESMProtein.from_pdb(_pdb_path)
-                sequences.append(structure.sequence)
-                structures.append(structure.coordinates)
-                lengths.append(len(structure.sequence))
             return {
                 'name':name, 
-                'seq': sequences, 
-                'X': structures, 
+                'seq': aa_seq, 
+                'X': None, 
                 'label': label, 
                 'unique_id': unique_id, 
-                'length': lengths,
-                'pdb_path': pdb_path.split("|")
+                'pdb_path': pdb_path,
+                'smiles': smiles
             }
     except:
         return None
@@ -70,19 +83,18 @@ class ProteinDataset(Dataset):
 
         path_list = []
         for i in range(len(csv_data)):
-            path_list.append((csv_data.iloc[i]['pdb_path'], csv_data.iloc[i]['label'], csv_data.iloc[i]['unique_id'], task_type, num_classes)) #列表里面必须是元组，不然debug模式下并行加载数据会报错
+            path_list.append((csv_data.iloc[i].get('aa_seq'), csv_data.iloc[i].get('pdb_path'), csv_data.iloc[i]['label'], csv_data.iloc[i]['unique_id'], task_type, num_classes, csv_data.iloc[i].get('smiles'))) #列表里面必须是元组，不然debug模式下并行加载数据会报错
         
-        path_list = path_list[:50] # this is for fast debug, please comment it in production
-        self.data = pmap_multi(read_data, path_list, n_jobs=None)
+        # path_list = path_list[:10] # this is for fast debug, please comment it in production
+        self.data = pmap_multi(read_data, path_list, n_jobs=-1)
         self.data = [d for d in self.data if d is not None]
         self.pretrain_model_interface = pretrain_model_interface
 
         if pretrain_model_interface is not None:
             self.data = pretrain_model_interface.inference_datasets(self.data, task_name=self.task_name)
-        
+
         print(f"ProteinDataset: {len(self.data)} samples loaded.")
         
-
     def __len__(self):
         return len(self.data)
     
@@ -96,19 +108,24 @@ class ProteinDataset(Dataset):
     
     def __getitem__(self, idx):
         if self.pretrain_model_interface is not None:
+            if "pair" in self.task_type:
+                max_length_batch = 2*self.max_length
+            else: max_length_batch = self.max_length
             name = self.data[idx]['name']
-            embedding = self.pad_data(self.data[idx]['embedding'], dim=0, pad_value=0, max_length=self.max_length)
-            attention_mask = self.pad_data(self.data[idx]['attention_mask'], dim=0, pad_value=0, max_length=self.max_length)
+            embedding = self.pad_data(self.data[idx]['embedding'], dim=0, pad_value=0, max_length=max_length_batch)
+            attention_mask = self.pad_data(self.data[idx]['attention_mask'], dim=0, pad_value=0, max_length=max_length_batch)
             label = self.data[idx]['label']
+            smiles = self.data[idx]['smiles']
             if self.task_type == 'binary_classification':
                 label = label[None].float()
-            # elif self.task_type == 'contact':
-            #     label = F.pad(label, [0, self.max_length-label.shape[0],0, self.max_length-label.shape[0]])
+            if self.task_type == 'contact':
+                label = F.pad(label, [0, max_length_batch-label.shape[0],0, max_length_batch-label.shape[0]])
             return {
                 'name': name,
                 'embedding': embedding,
                 'attention_mask': attention_mask,
                 'label': label,
+                'smiles': smiles
             }
         else:
             seq = self.data[idx]['seq']
@@ -121,11 +138,13 @@ class ProteinDataset(Dataset):
             seq_token = torch.tensor(self.tokenizer.encode(seq))
             mask[:len(seq_token)] = 0
             seq_token = self.pad_data(seq_token, dim=0)
+            smiles = self.data[idx].get('smiles')
             sample = {
                 'seq': seq_token,
                 'label': torch.tensor(label),
                 'mask': mask,
                 'coords': X,
+                'smiles': smiles
             }
 
             return sample

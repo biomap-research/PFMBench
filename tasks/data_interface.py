@@ -37,15 +37,20 @@ class DInterface(DInterface_base):
             mask_list = []
             label_list = []
             embedding_list = []
+            smiles = []
             for data in data_list:
                 name_list.append(data['name'])
                 mask_list.append(data['attention_mask'])
                 label_list.append(data['label'])
                 embedding_list.append(data['embedding'])
+                if data.get('smiles') is not None:
+                    smiles.append(data['smiles'])
             return {'name': name_list,
                     'attention_mask': torch.stack(mask_list, dim=0),
                     'label': torch.stack(label_list, dim=0),
-                    'embedding': torch.stack(embedding_list, dim=0)}
+                    'embedding': torch.stack(embedding_list, dim=0),
+                    'smiles': torch.stack(smiles, dim=0) if len(smiles) > 0 else None,
+                    }
         else:
             seq_list = []
             coords_list = []

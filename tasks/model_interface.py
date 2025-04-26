@@ -44,7 +44,7 @@ class MInterface(MInterface_base):
         log_dict = {'val_loss': loss}
         self._context["validation"]["logits"].append(ret['logits'].float().cpu().numpy())
         self._context["validation"]["labels"].append(batch['label'].float().cpu().numpy())
-        self._context["validation"]["attn_mask"].append(batch['mask'].float().cpu().numpy())
+        self._context["validation"]["attn_mask"].append(batch['attention_mask'].float().cpu().numpy())
 
         self.log_dict(log_dict)
         return self.log_dict
@@ -71,7 +71,7 @@ class MInterface(MInterface_base):
         log_dict = {'test_loss': loss}
         self._context["test"]["logits"].append(ret['logits'].float().cpu().numpy())
         self._context["test"]["labels"].append(batch['label'].float().cpu().numpy())
-        self._context["test"]["attn_mask"].append(batch['mask'].float().cpu().numpy())
+        self._context["test"]["attn_mask"].append(batch['attention_mask'].float().cpu().numpy())
         return self.log_dict
 
     def on_test_epoch_end(self):
@@ -112,6 +112,9 @@ class MInterface(MInterface_base):
             return {f"{name}_f1_max": f1_max}
         elif self.hparams.task_type == "contact":
             from src.model.finetune_model import contact_metrics
+            preds = torch.cat([torch.from_numpy(one) for one in preds], dim=0)
+            target = torch.cat([torch.from_numpy(one) for one in target], dim=0)
+            attn_mask = torch.cat([torch.from_numpy(one) for one in attn_mask], dim=0)
             metrics = contact_metrics(preds, target, attn_mask)
             return {f"{name}_Top(L/5)": metrics['Top(L/5)']}
 

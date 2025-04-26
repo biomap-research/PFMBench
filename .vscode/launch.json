@@ -24,11 +24,28 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
+                "--config_name", "pdbind",
+                "--pretrain_model_name", "esm2_650m",
+                "--num_workers", "1",
+            ],
+            "env": {
+                "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/",
+                "CUDA_VISIBLE_DEVICES": "0",
+            },
+        },
+        {
+            "name": "zeroshot",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/zeroshot/proteingym_light.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
                 "--config_name", "contact_map",
             ],
             "env": {
                 "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/",
-                "CUDA_VISIBLE_DEVICES": "2",
+                "CUDA_VISIBLE_DEVICES": "0",
                 // "CONFIG_NAME": "fitness_prediction",
                 // "EXP_NAME": "fitness_prediction",
                 // "OFFLINE": "1"

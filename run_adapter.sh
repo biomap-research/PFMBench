@@ -43,8 +43,8 @@ CUDA_VISIBLE_DEVICES=7 wandb agent biomap_ai/protein_benchmark/97zkwpi2 &
 # =============== GO BP ===============
 CUDA_VISIBLE_DEVICES=0 wandb agent biomap_ai/protein_benchmark/4e0r6pcm &
 CUDA_VISIBLE_DEVICES=1 wandb agent biomap_ai/protein_benchmark/4e0r6pcm &
-CUDA_VISIBLE_DEVICES=2 wandb agent biomap_ai/protein_benchmark/4e0r6pcm &
-CUDA_VISIBLE_DEVICES=3 wandb agent biomap_ai/protein_benchmark/4e0r6pcm &
+CUDA_VISIBLE_DEVICES=2 wandb agent biomap_ai/protein_benchmark/sq4otzmx &
+CUDA_VISIBLE_DEVICES=3 wandb agent biomap_ai/protein_benchmark/sq4otzmx &
 
 # =============== GO MF ===============
 CUDA_VISIBLE_DEVICES=0 wandb agent biomap_ai/protein_benchmark/u9x8o6d0 &

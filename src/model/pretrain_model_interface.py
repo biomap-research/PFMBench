@@ -6,6 +6,8 @@ from src.data.esm.sdk.api import LogitsConfig
 import os
 import pickle
 from tqdm import tqdm
+from rdkit import Chem
+from rdkit.Chem import AllChem
 import sys; sys.path.append('/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom')
 from model_zoom.esm.utils.sampling import _BatchedESMProteinTensor
 MODEL_ZOOM_PATH = '/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom'
@@ -193,62 +195,72 @@ class PretrainModelInterface(nn.Module):
         Yields:
             dict: A batch of data.
         """
+        MAXLEN = 1022
         for i in range(0, len(data), batch_size):
             if self.pretrain_model_name == 'esm2_650m':
-                name_batch, X_batch, S_batch, mask_batch, label_batch = [], [], [], [], []
+                add_BOS = 1
+                name_batch, label_batch, smiles_batch = [], [], []
                 if "pair" in self.task_type:
-                    max_length_batch = max(
-                        [max(len(seq) for seq in sample['seq']) for sample in data[i:i + batch_size]]
-                    ) + 2
+                    current_batch = [sample["seq"] for sample in data[i:i + batch_size]]
+                    max_length_batch = [max(len(s) for s in column)+2 for column in zip(*current_batch)]
                 else:
-                    max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])+2
-                
+                    max_length_batch = [max([len(sample['seq']) for sample in data[i:i + batch_size]]) + 2]
+                X_batch, S_batch, mask_batch, t_lengths = [[] for _ in range(len(max_length_batch))], \
+                                                          [[] for _ in range(len(max_length_batch))], \
+                                                          [[] for _ in range(len(max_length_batch))], \
+                                                          [[] for _ in range(len(max_length_batch))] 
                 for sample in data[i:i + batch_size]:
                     seq = sample['seq']
                     label = sample['label']
-                    X = sample['X']
-                    if not isinstance(seq, list) and not isinstance(X, list):
-                        seq, X = [seq], [X]
-                    seq_tokens, Xs, attention_masks = [], [], []
-                    for _seq, _X in zip(seq, X):
-                        _seq, _X = _seq[:1022], _X[:1022]
-                        attention_mask = torch.zeros(max_length_batch)
-                    
+                    smiles = sample['smiles'] if 'smiles' in sample else None
+                    if smiles:
+                        mol = Chem.MolFromSmiles(smiles)
+                        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+                        smiles = torch.tensor([int(ele) for ele in list(fp.ToBitString())]).float()
+                    if not isinstance(seq, list):
+                        seq = [seq]
+
+                    for j, _seq in enumerate(seq):
+                        _seq = _seq[:MAXLEN]
+                        t_lengths[j].append(len(_seq))
+                        attention_mask = torch.zeros(max_length_batch[j])
                         seq_token = torch.tensor(self.tokenizer.encode(_seq))
                         attention_mask[:len(seq_token)] = 1
-                        seq_token = self.pad_data(seq_token, dim=0, max_length=max_length_batch)
+                        seq_token = self.pad_data(seq_token, dim=0, max_length=max_length_batch[j])
+                        # _X = dynamic_pad(_X, [add_BOS, add_BOS], dim=0, pad_value=0) # 坐标需要和seq一样加上BOS, EOS
+                        # _X = self.pad_data(_X, dim=0, max_length=max_length_batch[j])
+
+                        S_batch[j].append(seq_token)
+                        # X_batch[j].append(_X)
+                        mask_batch[j].append(attention_mask)
                     
-                        _X = dynamic_pad(_X, [1, 1], dim=0, pad_value=0) # 坐标需要和seq一样加上BOS, EOS
-                        _X = self.pad_data(_X, dim=0, max_length=max_length_batch)
-
-                        seq_tokens.append(seq_token)
-                        Xs.append(_X)
-                        attention_masks.append(attention_mask)
-
-                    seq_tokens = torch.hstack(seq_tokens)
-                    Xs = torch.vstack(Xs)
-                    attention_masks = torch.hstack(attention_masks)
-
-                    S_batch.append(seq_tokens)
-                    X_batch.append(Xs)
-                    mask_batch.append(attention_masks)
                     if task_name == 'contact_map':
-                        label = F.pad(label, [1, self.max_length-label.shape[0]+1, 1, self.max_length-label.shape[0]+1])
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
                     else:
-                        torch.tensor(label)
-                        
+                        label = torch.tensor(label)
+
                     label_batch.append(label)
                     name_batch.append(sample['name'])
-        
+                    if smiles is not None:
+                        smiles_batch.append(smiles)
+
+                S_batch = [torch.stack(ele).to(self.device) for ele in S_batch]
+                # X_batch = [torch.stack(ele).to(self.device) for ele in X_batch]
+                mask_batch = [torch.stack(ele).to(self.device)==1 for ele in mask_batch]
+                t_lengths = [torch.tensor(ele).to(self.device) for ele in t_lengths]
+                smiles_batch = None if len(smiles_batch) == 0 else torch.stack(smiles_batch)
                 yield {
                     'name': name_batch,
-                    'seq': torch.stack(S_batch).to(self.device),
-                    'X': torch.stack(X_batch).to(self.device),
-                    'attention_mask': torch.stack(mask_batch).to(self.device)==1,
-                    'label': torch.stack(label_batch).to(self.device),
+                    'seq': S_batch,
+                    # 'X': X_batch,
+                    't_lengths': t_lengths,
+                    'smiles': smiles_batch,
+                    'attention_mask': mask_batch,
+                    'label': torch.stack(label_batch),
                 }
             
             if self.pretrain_model_name == 'esm3_1.4b':
+                addBOS = 1
                 from model_zoom.esm.utils.misc import stack_variable_length_tensors
                 from model_zoom.esm.utils.sampling import _BatchedESMProteinTensor
                 from model_zoom.esm.utils import encoding
@@ -260,19 +272,14 @@ class PretrainModelInterface(nn.Module):
                 if "pair" in self.task_type:
                     max_length_batch = max(
                         [max(len(seq) for seq in sample['seq']) for sample in data[i:i + batch_size]]
-                    ) + 2
+                    ) + addBOS*2
                 else:
-                    max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])+2
+                    max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])+addBOS*2
                 for sample in data[i:i + batch_size]:
                     name, label, seq, X = sample['name'], sample['label'], sample['seq'], sample['X']
-                    if not isinstance(seq, list) and not isinstance(X, list):
-                        seq, X = [seq], [X]
-                        length = 1
-                    else:
-                        length = len(sample['length'])
                     sequence_tokens, structure_tokens, coordinates, masks = [], [], [], []
                     for _seq, _X in zip(seq, X):
-                        _seq, _X = _seq[:1022], _X[:1022]
+                        _seq, _X = _seq[:MAXLEN], _X[:MAXLEN]
                         _seq_token = encoding.tokenize_sequence(_seq, seq_tokenizer, add_special_tokens=True)
                         _coordinates, _plddt, _structure_token = encoding.tokenize_structure(
                             _X, 
@@ -286,7 +293,7 @@ class PretrainModelInterface(nn.Module):
                         # pad
                         _seq_token = self.pad_data(_seq_token, dim=0, pad_value=pad, max_length=max_length_batch)
                         _structure_token = self.pad_data(_structure_token, dim=0, pad_value=pad, max_length=max_length_batch)
-                        _coordinates = dynamic_pad(_coordinates, [1, 1], dim=0, pad_value=0) # 坐标需要和seq一样加上BOS, EOS
+                        _coordinates = dynamic_pad(_coordinates, [addBOS, addBOS], dim=0, pad_value=0) # 坐标需要和seq一样加上BOS, EOS
                         _coordinates = self.pad_data(_coordinates, dim=0, max_length=max_length_batch)
                         sequence_tokens.append(_seq_token)
                         structure_tokens.append(_structure_token)
@@ -303,7 +310,13 @@ class PretrainModelInterface(nn.Module):
                     structure_tokens_batch.append(structure_tokens)
                     mask_batch.append(masks)
                     name_batch.append(sample['name'])
-                    label_batch.append(torch.tensor(sample['label']))
+                    label = sample['label']
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                        
+                    label_batch.append(label)
                 
                 sequence_tokens = stack_variable_length_tensors(
                     sequence_list,
@@ -335,15 +348,16 @@ class PretrainModelInterface(nn.Module):
                     
             
             if self.pretrain_model_name == 'esmc_600m':
+                addBOS = 1
                 from model_zoom.esm.utils.sampling import _BatchedESMProteinTensor
                 from model_zoom.esm.utils.misc import stack_variable_length_tensors
                 name_batch, seq_batch, mask_batch, label_batch = [], [], [], []
                 if "pair" in self.task_type:
                     max_length_batch = max(
                         [max(len(seq) for seq in sample['seq']) for sample in data[i:i + batch_size]]
-                    ) + 2
+                    ) + addBOS*2
                 else:
-                    max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])+2
+                    max_length_batch = max([len(sample['seq']) for sample in data[i:i + batch_size]])+addBOS*2
                 for sample in data[i:i + batch_size]:
                     seq = sample['seq']
                     label = sample['label']
@@ -364,7 +378,11 @@ class PretrainModelInterface(nn.Module):
 
                     seq_batch.append(seq_tokens)
                     mask_batch.append(attention_masks)
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
 
                 sequence_tokens = stack_variable_length_tensors(
@@ -382,6 +400,7 @@ class PretrainModelInterface(nn.Module):
                 }
             
             if self.pretrain_model_name == 'procyon':
+                add_BOS = 0
                 from model_zoom.GearNet.data.protein import Protein
                 name_batch, X_batch, S_batch, label_batch = [], [], [], []
                 if "pair" in self.task_type:
@@ -426,10 +445,15 @@ class PretrainModelInterface(nn.Module):
 
                         seq_embeddings = torch.cat(seq_embeddings, dim=-1)
                         struct_embeddings = torch.cat(struct_embeddings, dim=-1)
+                        
+                        if task_name == 'contact_map':
+                            label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                        else:
+                            label = torch.tensor(label)
 
                         S_batch.append(seq_embeddings)
                         X_batch.append(struct_embeddings)
-                        label_batch.append(torch.tensor(label))
+                        label_batch.append(label)
                         name_batch.append(sample['name'])
                     except:
                         print(f"Error processing sample {sample['name']}")
@@ -443,6 +467,7 @@ class PretrainModelInterface(nn.Module):
                 }
             
             if self.pretrain_model_name == 'gearnet':
+                add_BOS = 0
                 from model_zoom.GearNet.data.protein import Protein
                 name_batch, X_batch, S_batch, label_batch = [], [], [], []
                 # proteins = []
@@ -461,7 +486,11 @@ class PretrainModelInterface(nn.Module):
                             # sub_proteins.append(protein)
                         proteins_pair_1.append(temp_proteins[0])
                         proteins_pair_2.append(temp_proteins[1])
-                        label_batch.append(torch.tensor(label))
+                        if task_name == 'contact_map':
+                            label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                        else:
+                            label = torch.tensor(label)
+                        label_batch.append(label)
                         name_batch.append(sample['name'])
                     except:
                         print(f"Error processing sample {sample['name']}")
@@ -533,7 +562,11 @@ class PretrainModelInterface(nn.Module):
                     attention_masks = torch.hstack(attention_masks)
                     S_batch.append(seq_tokens)
                     mask_batch.append(attention_masks)
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
         
                 yield {
@@ -569,7 +602,11 @@ class PretrainModelInterface(nn.Module):
                     attention_masks = torch.hstack(attention_masks)
                     S_batch.append(seq_tokens)
                     mask_batch.append(attention_masks)
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
         
                 yield {
@@ -611,7 +648,11 @@ class PretrainModelInterface(nn.Module):
                     S_batch.append(seq_token)
                     X_batch.append(X)
                     mask_batch.append(attention_mask)
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
         
                 yield {
@@ -650,7 +691,11 @@ class PretrainModelInterface(nn.Module):
                     attention_masks = torch.hstack(attention_masks)
                     S_batch.append(seq_tokens)
                     mask_batch.append(attention_masks)
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
                 yield {
                     'name': name_batch,
@@ -687,7 +732,11 @@ class PretrainModelInterface(nn.Module):
                     
                     S_batch.append(seq_tokens[:1024])
                     mask_batch.append(attention_masks[:1024])
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
         
                 yield {
@@ -747,7 +796,11 @@ class PretrainModelInterface(nn.Module):
                     
                     S_batch.append(seq_tokens)
                     mask_batch.append(attention_masks)
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
         
                 yield {
@@ -787,7 +840,11 @@ class PretrainModelInterface(nn.Module):
                     
                     S_batch.append(seq_tokens)
                     mask_batch.append(attention_masks)
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
         
                 yield {
@@ -827,7 +884,11 @@ class PretrainModelInterface(nn.Module):
                     attention_masks = torch.hstack(attention_masks)
                     struct_batch.append(struct_tokens)
                     seq_batch.append(seq_tokens)
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
                     mask_batch.append(attention_masks)
 
@@ -874,7 +935,11 @@ class PretrainModelInterface(nn.Module):
                     attention_masks = torch.hstack(attention_masks)
                     S_batch.append(seq_tokens)
                     mask_batch.append(attention_masks)
-                    label_batch.append(torch.tensor(label))
+                    if task_name == 'contact_map':
+                        label = F.pad(label, [add_BOS, self.max_length-label.shape[0]-add_BOS, add_BOS, self.max_length-label.shape[0]-add_BOS])
+                    else:
+                        label = torch.tensor(label)
+                    label_batch.append(label)
                     name_batch.append(sample['name'])
         
                 yield {
@@ -889,30 +954,29 @@ class PretrainModelInterface(nn.Module):
         names, labels = x['name'], x['label']
         if self.pretrain_model_name == 'esm2_650m':
             # Forward pass through the pre-trained model
-            seq, attention_mask = x['seq'], x['attention_mask']
-            embeddings = []
-            if "pair" in self.task_type:
-                split_idx = seq.shape[1] // 2
-                seq, attention_mask = [seq[:, :split_idx], seq[:, split_idx:]], [attention_mask[:, :split_idx], attention_mask[:, split_idx:]]
-            else:
-                seq, attention_mask = [seq], [attention_mask]
-            for _seq, _attention_mask in zip(seq, attention_mask):
+            seq, attention_mask, t_lengths, smiles = x['seq'], x['attention_mask'], x['t_lengths'], x['smiles']
+            embeddings, attention_masks = [], []
+            for i, (_seq, _attention_mask, _t_length) in enumerate(zip(seq, attention_mask, t_lengths)):
                 outputs = self.pretrain_model.esm(
                             _seq,
                             attention_mask=_attention_mask,
                             return_dict=True,
                         )
-                embeddings.append(outputs.last_hidden_state)
-            embeddings = torch.cat(embeddings, dim=-1)
+                _embeddings = outputs.last_hidden_state
+                _t_length = torch.where(_t_length==_t_length.max(), _t_length-1, _t_length)
+                if i != len(seq) - 1:
+                    _attention_mask.scatter_(1, _t_length.unsqueeze(1), True)
+                embeddings.append(_embeddings)
+                attention_masks.append(_attention_mask)
+            embeddings = torch.cat(embeddings, dim=1)
+            attention_mask = torch.cat(attention_masks, dim=-1)
+
             if "pair" in self.task_type:
-                attention_mask = (attention_mask[0].int() + attention_mask[1].int() > 0)
+                ends = torch.tensor([attention_mask.shape[1]]*attention_mask.shape[0])-1
+                starts = torch.ones_like(ends)
+            else:
                 ends = attention_mask.sum(dim=-1)-1
                 starts = torch.ones_like(ends)
-                attention_mask = attention_mask
-            else:
-                ends = attention_mask[0].sum(dim=-1)-1
-                starts = torch.ones_like(ends)
-                attention_mask = attention_mask[0]
             
         if self.pretrain_model_name == 'esm3_1.4b': # WORKING
             protein_tensor, attention_mask = x['protein_tensor'], x['attention_mask']
@@ -1307,17 +1371,24 @@ class PretrainModelInterface(nn.Module):
                 starts = torch.ones_like(ends)
 
         # 这个embedding 是[B,L,D]的形式, L是氨基酸数量, 但对于语言模型老师, L这个维度可能不刚好等于氨基酸数量，无法用于氨基酸级别的预测任务。另外，有些方法会加上[EOS, BOS]，有些又不需要，最好是在最后的embedding上统一去除[EOS, BOS]
-        return self.post_process(names, labels, embeddings, attention_mask, starts, ends)
+        return self.post_process(names, labels, embeddings, attention_mask, starts, ends, smiles)
     
-    def post_process(self, names, labels, embeddings, attention_mask, starts, ends)->list:
+    def post_process(self, names, labels, embeddings, attention_mask, starts, ends, smiles)->list:
         results = []
         for i, end in enumerate(ends):
             start = starts[i]
+            label = labels[i].cpu()
+            if self.task_type == 'contact':
+                label = labels[i,start:end, start:end].cpu()
+            
             results.append( 
-                            {'name': names[i],
-                            'embedding': embeddings[i,start:end].cpu(),
-                            'attention_mask': attention_mask[i,start:end].cpu(),
-                            'label': labels[i].cpu()}
+                {
+                    'name': names[i],
+                    'embedding': embeddings[i,start:end].cpu(),
+                    'attention_mask': attention_mask[i,start:end].cpu(),
+                    'label': label,
+                    'smiles': smiles[i] if smiles is not None else None
+                }
             )
 
         return results

@@ -63,9 +63,9 @@ class UniModel(nn.Module):
             if pretrain_model_name == 'prosst2048':
                 self.input_dim = 768
 
-            if "pair" in self.task_type:
-                self.input_dim *= 2
-
+            self.smiles_proj = nn.Sequential(nn.Linear(2048, hid_dim),
+                                      nn.GELU()
+            )
             self.proj = nn.Sequential(nn.Linear(self.input_dim, hid_dim),
                                       nn.LayerNorm(hid_dim))
             
@@ -149,66 +149,72 @@ class UniModel(nn.Module):
     
     def forward(self, batch):
         if self.finetune_type == 'adapter':
-            attention_mask = batch['attention_mask']
             labels = batch['label']
-            proj_output = self.proj(batch['embedding'])
+            attention_mask = batch['attention_mask']
+            embeddings, smiles = batch['embedding'], batch['smiles']
+            proj_output = self.proj(embeddings)
+            if smiles is not None:
+                smiles_proj_output = self.smiles_proj(smiles).unsqueeze(1)
+                smiles_attention_mask = torch.ones(attention_mask.shape[0], 1, device=attention_mask.device).bool()
+                proj_output = torch.cat((smiles_proj_output, proj_output), dim=1).contiguous()
+                attention_mask = torch.cat((smiles_attention_mask, attention_mask), dim=-1).contiguous()
             proj_output = self.adapter(proj_output, mask=attention_mask)
             pooled_output = torch.mean(proj_output, dim=1)
             logits = self.task_head(pooled_output)
-            if labels is not None:
+            if self.task_type == 'contact':
+                loss = self.loss(logits.float(), labels, batch['attention_mask'])
+                return {'loss': loss, 'logits': logits}
+            else:
                 if isinstance(self.loss, nn.BCEWithLogitsLoss):
-                    labels = labels.float()
+                    # labels = labels.float()
                     if labels.ndim == 1:
                         labels = labels.unsqueeze(1)
-                loss = self.loss(logits.float(), labels)
+                loss = self.loss(logits.float(), labels.float())
                 return {'loss': loss, 'logits': logits}
-            else:
-                return {'logits': logits}
+
         
-        seqs = batch['seq']
-        attention_mask = batch['mask']==0
-        labels = batch['label']
-        if self.pretrain_model_name == 'esm2_650m':
-            if self.finetune_type == 'lora':
-                outputs = self.pretrain_model.esm(
-                    seqs,
-                    attention_mask=attention_mask,
-                    return_dict=True,
-                )
-                hidden_states = outputs.last_hidden_state
-                proj_output = self.proj(hidden_states)
-        
-        if self.pretrain_model_name == 'prollama':                
-            if self.finetune_type == 'lora':
-                outputs = self.pretrain_model(
-                    input_ids = seqs,
-                    attention_mask=attention_mask,
-                    output_hidden_states=True
-                )
-                hidden_states = outputs.hidden_states[-1]
-                proj_output = self.proj(hidden_states)
-                
-        #     if self.finetune_type == 'adapter':
-        #         with torch.no_grad():
-        #             outputs = self.pretrain_model.esm(
-        #                 seqs,
-        #                 attention_mask=attention_mask,
-        #                 return_dict=True,
-        #             )
+        # seqs = batch['seq']
+        # attention_mask = batch['mask']==0
+        # labels = batch['label']
+        # if self.pretrain_model_name == 'esm2_650m':
+        #     if self.finetune_type == 'lora':
+        #         outputs = self.pretrain_model.esm(
+        #             seqs,
+        #             attention_mask=attention_mask,
+        #             return_dict=True,
+        #         )
         #         hidden_states = outputs.last_hidden_state
         #         proj_output = self.proj(hidden_states)
-        #         # 通过 Transformer Adapter 处理
-        #         proj_output = self.adapter(proj_output, mask=attention_mask)
-            
-            
-            pooled_output = torch.mean(proj_output, dim=1)
-            logits = self.task_head(pooled_output)
         
-            if labels is not None:
-                loss = self.loss(logits, labels)
-                return {'loss': loss, 'logits': logits}
-            else:
-                return {'logits': logits}
+        # if self.pretrain_model_name == 'prollama':                
+        #     if self.finetune_type == 'lora':
+        #         outputs = self.pretrain_model(
+        #             input_ids = seqs,
+        #             attention_mask=attention_mask,
+        #             output_hidden_states=True
+        #         )
+        #         hidden_states = outputs.hidden_states[-1]
+        #         proj_output = self.proj(hidden_states)
+                
+        # #     if self.finetune_type == 'adapter':
+        # #         with torch.no_grad():
+        # #             outputs = self.pretrain_model.esm(
+        # #                 seqs,
+        # #                 attention_mask=attention_mask,
+        # #                 return_dict=True,
+        # #             )
+        # #         hidden_states = outputs.last_hidden_state
+        # #         proj_output = self.proj(hidden_states)
+        # #         # 通过 Transformer Adapter 处理
+        # #         proj_output = self.adapter(proj_output, mask=attention_mask)
+            
+            
+        
+        #     if labels is not None:
+        #         loss = self.loss(logits, labels)
+        #         return {'loss': loss, 'logits': logits}
+        #     else:
+        #         return {'logits': logits}
         
 # Transformer Adapter 模块
 class TransformerAdapter(nn.Module):
@@ -255,30 +261,13 @@ class ContactPredictionHead(nn.Module):
             torch.nn.init.zeros_(this_layer.bias)
             self.layers.append(this_layer)
 
-    def outer_concat(self, x):
-        x = x.permute(1, 0)
-        x_1 = x[None, :, :, None]
-        x_2 = x[None, :, None, :]
-        x_1 = x_1.repeat(1, 1, 1,  x.shape[1])
-        x_2 = x_2.repeat(1, 1, x.shape[1],  1)
-        x = torch.cat((x_1, x_2), dim=1)
-        I, J = torch.tril_indices(x.shape[-1], x.shape[-1], -1)
-        x[:, :, I, J] = x[:, :, J, I]                # symmetrization
-        return x.permute(0,2,3,1).contiguous()
 
     def forward(self, embeddings, **kwargs):
-        results = embeddings['wt']
-        if isinstance(results, tuple) or isinstance(results, list):
-            logits, *_ = results
-        else:
-            logits = results
-        logits = logits.squeeze(0)
-        logits = self.outer_concat(logits)
+        logits = torch.cat([(embeddings[:,:,None]+embeddings[:,None,:]), torch.max(embeddings[:,:,None], embeddings[:,None,:])], dim=-1)
         for i, layer in enumerate(self.layers):
             if i > 0:
                 logits = self.activation_func(logits)
             logits = layer(logits)
-        logits.unsqueeze(0)
         return logits
 
 
@@ -286,18 +275,18 @@ class ContatcLoss(nn.Module):
     def __init__(self):
         super().__init__()
     
-    def forward(self, logits, labels, **kwargs):
+    def forward(self, logits, labels, mask):
         pred = logits.contiguous().float().squeeze(0)
         labels[labels>0] = -1
         labels[labels==0] = 1
         labels[labels==-1] = 0
+        
+        select = (mask[:,:,None]&mask[:,None])
         loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            pred.view(-1).contiguous(),
-            labels.view(-1).contiguous().float()
+            pred[select].view(-1).contiguous(),
+            labels[select].view(-1).contiguous().float()
         )
-        pred = pred.view(-1)
-        labels = labels.view(-1)
-        return {"loss": loss}
+        return loss
 
 def metric_eval(pred_y, y, inds, ls, lens):
     tests = []
@@ -328,27 +317,29 @@ def contact_metrics(preds, labels, attn_masks):
     total_acc = 0
     valid_samples = 0
     for b in range(preds.shape[0]):
-        pred = preds[b]
+        pred = preds[b][...,0]
         label = labels[b]
-        mask = attn_masks[b]
-        valid_idx = mask.nonzero(as_tuple=True)[0]
-        length = len(valid_idx)
+        mask = attn_masks[b]==1
+        pred = pred[:mask.sum(), :mask.sum()]
+        label = label[:mask.sum(), :mask.sum()]
+        # valid_idx = (mask[:,None]*mask[None]).nonzero(as_tuple=True)[0]
+        # length = len(valid_idx)
 
-        if length < 2:
-            continue  # skip too-short sequences
+        # if length < 2:
+        #     continue  # skip too-short sequences
 
-        pred = preds[b][valid_idx][:, valid_idx]  # shape [L', L']
-        label = labels[b][valid_idx][:, valid_idx]
+        # pred = preds[b][valid_idx][:, valid_idx]  # shape [L', L']
+        # label = labels[b][valid_idx][:, valid_idx]
         
         
         label[label>0] = -1
         label[label==0] = 1
         label[label==-1] = 0
-        pred = pred.view(-1)
-        label = label.view(-1)
+        pred = pred.reshape(-1)
+        label = label.reshape(-1)
         indices = torch.argsort(-pred)
         l = label.shape[-1]
         _,_, acc = metric_eval(pred, label, indices, l//5, l)
         total_acc += acc
-        alid_samples += 1
+        valid_samples += 1
     return {"Top(L/5)": total_acc / valid_samples if valid_samples > 0 else 0.0}
