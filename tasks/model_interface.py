@@ -100,7 +100,7 @@ class MInterface(MInterface_base):
             acc = (preds == target).mean()
             return {f"{name}_acc": acc}
         elif self.hparams.task_type in ["binary_classification", "pair_binary_classification"]:
-            preds, target = np.vstack(preds), np.hstack(target) 
+            preds, target = np.vstack(preds), np.concatenate(target, axis=0) 
             auroc = roc_auc_score(target, preds)
             return {f"{name}_auroc": auroc}
         elif self.hparams.task_type in ["regression", "pair_regression"]:

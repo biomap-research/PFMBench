@@ -88,7 +88,7 @@ class ProteinDataset(Dataset):
         for i in range(len(csv_data)):
             path_list.append((csv_data.iloc[i].get('aa_seq'), csv_data.iloc[i].get('pdb_path'), csv_data.iloc[i]['label'], csv_data.iloc[i].get('unique_id'), task_type, num_classes, csv_data.iloc[i].get('smiles'))) #列表里面必须是元组，不然debug模式下并行加载数据会报错
         
-        path_list = path_list[:200] # this is for fast debug, please comment it in production
+        # path_list = path_list[:10] # this is for fast debug, please comment it in production
         self.data = pmap_multi(read_data, path_list, n_jobs=1)
         self.data = [d for d in self.data if d is not None]
         self.max_length = min(self.max_length, max([len(d['seq']) for d in self.data])+2)
