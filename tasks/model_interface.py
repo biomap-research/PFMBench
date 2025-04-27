@@ -103,7 +103,7 @@ class MInterface(MInterface_base):
             preds, target = np.vstack(preds), np.hstack(target) 
             auroc = roc_auc_score(target, preds)
             return {f"{name}_auroc": auroc}
-        elif self.hparams.task_type == "regression":
+        elif self.hparams.task_type in ["regression", "pair_regression"]:
             preds, target = np.hstack(preds), np.hstack(target) 
             return {f"{name}_spearman": spearmanr(target, preds).statistic}
         elif self.hparams.task_type == "multi_labels_classification":

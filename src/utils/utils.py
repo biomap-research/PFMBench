@@ -29,37 +29,7 @@ def pmap_multi(pickleable_fn, data, n_jobs=None, verbose=1, desc=None, **kwargs)
     return results
 
     
-# def pmap_multi(pickleable_fn, data, n_jobs=None, desc=None, **kwargs):
-#     """
-#     Parallel map using multiprocessing.Pool, supports multi-argument unpacking.
 
-#     Parameters
-#     ----------
-#     pickleable_fn : callable
-#         Function to apply.
-#     data : list of tuple
-#         Inputs to apply the function on. Each element is a tuple of positional arguments.
-#     n_jobs : int
-#         Number of processes. Defaults to all available CPUs.
-#     desc : str
-#         tqdm description.
-#     kwargs : dict
-#         Extra keyword arguments passed to the function.
-
-#     Returns
-#     -------
-#     List of function outputs.
-#     """
-#     if n_jobs is None:
-#         n_jobs = cpu_count()
-
-#     # 构建 [(fn, d_i, kwargs)] 列表
-#     task_args = [(pickleable_fn, d if isinstance(d, tuple) else (d,), kwargs) for d in data]
-
-#     with Pool(processes=n_jobs) as pool:
-#         results = list(tqdm(pool.imap(_worker, task_args), total=len(data), desc=desc))
-
-#     return results
 
 
 def modulo_with_wrapped_range(
@@ -99,46 +69,6 @@ def modulo_with_wrapped_range(
     return retval
 
 
-class RectifiedFlow():
-  def __init__(self, model=None, num_steps=1000):
-    self.model = model
-    self.N = num_steps
-
-  def get_train_tuple(self, z0=None, z1=None, t=None, batch_id=None):
-    dtype = z0.dtype
-    if batch_id is None:
-        t = torch.rand((z1.shape[0], 1, 1), device=z0.device, dtype=dtype)
-    else:
-        t = torch.rand((batch_id.unique().shape[0], 1, 1), device=z0.device, dtype=dtype)
-        t = t[batch_id]
-    z_t =  t * z1 + (1.-t) * z0
-    # target = z1 - z0
-    target = z1 - z_t
-
-    return z_t, t, target
-
-  @torch.no_grad()
-  def sample_ode(self, z0=None,  N=None, batch_id=None, chain_encoding=None):
-    ### NOTE: Use Euler method to sample from the learned flow
-    if N is None:
-      N = self.N
-    dt = 1./N
-    traj = [] # to store the trajectory
-    z = z0.detach().clone()
-    batchsize = z.shape[0]
-    norm_max = torch.ones_like(batch_id, device=z0.device)[:,None] * 10.
-
-    traj.append(z.detach().clone())
-    for i in range(N):
-      t = torch.ones((batchsize,1,1), device=z0.device) * i / N
-      z1_hat, all_preds, vq_los = self.model(chain_encoding, batch_id, z, t, norm_max)
-      z = z.detach().clone() + (z1_hat/norm_max[...,None]-z)/(1-t) * dt
-    #   z =  t * z1_hat + (1.-t) * z0
-
-      traj.append(z.detach().clone()*norm_max[...,None])
-
-    return traj
-
 
 def flatten_dict(d, parent_key='', sep='.', level=0):
     """
@@ -165,3 +95,53 @@ def flatten_dict(d, parent_key='', sep='.', level=0):
             # 否则直接添加到结果中
             items[new_key] = v
     return items
+
+def process_args(parser, config_path):
+    from hydra import initialize, compose
+    from omegaconf import DictConfig, OmegaConf
+    import sys
+    def eval_resolver(expr: str):
+        return eval(expr, {}, {})
+
+    OmegaConf.register_new_resolver("eval", eval_resolver, use_cache=False)
+
+    # ----------------------------------------------------------------------------
+    # 1) 先不看命令行，拿到纯“parser 默认值”：
+    defaults = parser.parse_args([])
+    defaults_dict = vars(defaults)
+
+    # 2) 真正去解析一次命令行（CLI + 默认）：
+    args = parser.parse_args()
+    args_dict = vars(args)
+
+    # 3) 再读你的 Hydra config，平展开成普通 dict：
+    with initialize(config_path=config_path):
+        cfg: DictConfig = compose(config_name=args.config_name)
+    config_dict = flatten_dict(OmegaConf.to_container(cfg, resolve=True))
+
+    # ----------------------------------------------------------------------------
+    # 4) 挖出哪些 key 的值是“真由用户在命令行里指定”的：
+    passed = set()
+    for tok in sys.argv[1:]:
+        if not tok.startswith('--'):
+            continue
+        # 支持 --foo=bar 和 --foo bar 两种写法
+        key = tok.lstrip('-').split('=')[0].replace('-', '_')
+        passed.add(key)
+
+    # 5) 最终合并：CLI > config_file > parser_default
+    merged = {}
+    for key in set(list(defaults_dict.keys())+list(config_dict.keys())):
+        if key in passed:
+            # 用户显式传进来的
+            merged[key] = args_dict[key]
+        elif key in config_dict:
+            # config 文件里有，且用户没在 CLI 指定，就用它
+            merged[key] = config_dict[key]
+        else:
+            # 都没有指定，就退回 parser 默认
+            merged[key] = defaults_dict[key]
+
+    # 用合并后的结果更新 args Namespace
+    args.__dict__.update(merged)
+    return args

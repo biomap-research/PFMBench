@@ -54,19 +54,16 @@ class DInterface(DInterface_base):
         else:
             seq_list = []
             coords_list = []
-            # chain_list = []
             label_list = []
             mask_list = []
             for data in data_list:
                 seq_list.append(data['seq'])
                 coords_list.append(data['coords'])
-                # chain_list.append(data['chain'])
                 label_list.append(data['label'])
                 mask_list.append(data['mask'])
             
             seq = torch.stack(seq_list, dim=0)
             coords = torch.stack(coords_list, dim=0)
-            # chain = torch.stack(chain_list, dim=0)
             label = torch.stack(label_list, dim=0)
             mask = torch.stack(mask_list, dim=0)
             
@@ -74,7 +71,6 @@ class DInterface(DInterface_base):
             return {
                 'seq': seq,
                 'coords': coords,
-                # 'chain': chain,
                 'label': label,
                 'mask': mask
             }

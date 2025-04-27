@@ -14,22 +14,11 @@ import pytorch_lightning.callbacks as plc
 from model_interface import MInterface
 from data_interface import DInterface
 import pytorch_lightning.loggers as plog
-from omegaconf import DictConfig, OmegaConf
-import hydra
 from src.utils.logger import SetupCallback
-from src.utils.utils import flatten_dict
+from src.utils.utils import process_args
 import math
 import wandb
-from hydra import initialize, compose
 
-def eval_resolver(expr: str):
-    return eval(expr, {}, {})
-
-OmegaConf.register_new_resolver("eval", eval_resolver, use_cache=False)
-
-# CONFIG_NAME = os.getenv('CONFIG_NAME')
-# GPUS_PER_NODE = int(os.getenv('GPUS_PER_NODE', '1'))
-# NNODES = int(os.getenv('NNODES', '1'))
 
 def create_parser():
     parser = argparse.ArgumentParser()
@@ -58,46 +47,8 @@ def create_parser():
     parser.add_argument('--finetune_type', default='adapter', type=str)
     parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm'])
     parser.add_argument("--config_name", type=str, default='fitness_prediction', help="Name of the Hydra config to use")
-    # ----------------------------------------------------------------------------
-    # 1) 先不看命令行，拿到纯“parser 默认值”：
-    defaults = parser.parse_args([])
-    defaults_dict = vars(defaults)
-
-    # 2) 真正去解析一次命令行（CLI + 默认）：
-    args = parser.parse_args()
-    args_dict = vars(args)
-
-    # 3) 再读你的 Hydra config，平展开成普通 dict：
-    with initialize(config_path="configs"):
-        cfg: DictConfig = compose(config_name=args.config_name)
-    config_dict = flatten_dict(OmegaConf.to_container(cfg, resolve=True))
-
-    # ----------------------------------------------------------------------------
-    # 4) 挖出哪些 key 的值是“真由用户在命令行里指定”的：
-    passed = set()
-    for tok in sys.argv[1:]:
-        if not tok.startswith('--'):
-            continue
-        # 支持 --foo=bar 和 --foo bar 两种写法
-        key = tok.lstrip('-').split('=')[0].replace('-', '_')
-        passed.add(key)
-
-    # 5) 最终合并：CLI > config_file > parser_default
-    merged = {}
-    for key in set(list(defaults_dict.keys())+list(config_dict.keys())):
-        if key in passed:
-            # 用户显式传进来的
-            merged[key] = args_dict[key]
-        elif key in config_dict:
-            # config 文件里有，且用户没在 CLI 指定，就用它
-            merged[key] = config_dict[key]
-        else:
-            # 都没有指定，就退回 parser 默认
-            merged[key] = defaults_dict[key]
-
-    # 用合并后的结果更新 args Namespace
-    args.__dict__.update(merged)
-    
+   
+    args = process_args(parser, config_path='../../tasks/configs')
     print(args)
     return args
 
@@ -155,19 +106,17 @@ def automl_setup(args, logger):
     return args, logger
     
 
-# @hydra.main(version_base=None, config_path="configs", config_name=CONFIG_NAME)
 def main():
     args = create_parser()
     
-    # config_dict = OmegaConf.to_container(cfg, resolve=True)
-    # args = create_parser(hydra_config=argparse.Namespace(**flatten_dict(config_dict)))
     if args.offline:
         os.environ["WANDB_MODE"] = "offline"
-    wandb.init(project='protein_benchmark', entity='biomap_ai')
+    wandb.init(project='protein_benchmark', entity='biomap_ai', dir=str(os.path.join(args.res_dir, args.ex_name)))
     logger = plog.WandbLogger(
                     project = 'protein_benchmark',
                     name=args.ex_name,
                     save_dir=str(os.path.join(args.res_dir, args.ex_name)),
+                    dir = str(os.path.join(args.res_dir, args.ex_name)),
                     offline = args.offline,
                     entity = "biomap_ai")
     

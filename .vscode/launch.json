@@ -24,7 +24,7 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--config_name", "pdbind",
+                "--config_name", "material_production",
                 "--pretrain_model_name", "esm2_650m",
                 "--num_workers", "1",
             ],

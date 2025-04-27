@@ -130,10 +130,14 @@ class UniModel(nn.Module):
             self.task_head = nn.Linear(hid_dim, num_classes)
             self.loss = nn.CrossEntropyLoss()
         
-        if task_type == 'regression':
+        if task_type in [
+            "regression",
+            "pair_regression"
+        ]:
             self.task_head = nn.Sequential(nn.Linear(hid_dim, 1),
                                            nn.Flatten(start_dim=0, end_dim=1))
             self.loss = nn.MSELoss()
+        
         
         if task_type == 'contact':
             self.task_head = ContactPredictionHead(hid_dim)
@@ -151,25 +155,28 @@ class UniModel(nn.Module):
         if self.finetune_type == 'adapter':
             labels = batch['label']
             attention_mask = batch['attention_mask']
-            embeddings, smiles = batch['embedding'], batch['smiles']
+            embeddings = batch['embedding']
             proj_output = self.proj(embeddings)
-            if smiles is not None:
+            if batch['smiles'] is not None:
+                smiles =  batch['smiles']
                 smiles_proj_output = self.smiles_proj(smiles).unsqueeze(1)
                 smiles_attention_mask = torch.ones(attention_mask.shape[0], 1, device=attention_mask.device).bool()
                 proj_output = torch.cat((smiles_proj_output, proj_output), dim=1).contiguous()
                 attention_mask = torch.cat((smiles_attention_mask, attention_mask), dim=-1).contiguous()
             proj_output = self.adapter(proj_output, mask=attention_mask)
-            pooled_output = torch.mean(proj_output, dim=1)
-            logits = self.task_head(pooled_output)
-            if self.task_type == 'contact':
-                loss = self.loss(logits.float(), labels, batch['attention_mask'])
+            
+            if self.task_type == 'contact': # resideu-level
+                logits = self.task_head(proj_output)
+                loss = self.loss(logits, labels, batch['attention_mask'])
                 return {'loss': loss, 'logits': logits}
-            else:
+            else: # sequence-level
+                pooled_output = torch.mean(proj_output, dim=1)
+                logits = self.task_head(pooled_output)
                 if isinstance(self.loss, nn.BCEWithLogitsLoss):
-                    # labels = labels.float()
+                    labels = labels.float()
                     if labels.ndim == 1:
                         labels = labels.unsqueeze(1)
-                loss = self.loss(logits.float(), labels.float())
+                loss = self.loss(logits, labels)
                 return {'loss': loss, 'logits': logits}
 
         

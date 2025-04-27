@@ -27,7 +27,7 @@ Model:
 
 Task:
   task_name: "material_production"
-  task_type: "binary_classification"
+  task_type: "classification"
   num_classes: 19
 
 hydra:

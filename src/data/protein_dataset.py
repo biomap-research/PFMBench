@@ -11,6 +11,9 @@ from sklearn.preprocessing import MultiLabelBinarizer
 
 def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles):
     try:
+        if unique_id is None:
+            unique_id = str(hash(aa_seq))
+            
         if task_type == "multi_labels_classification":
             mlb = MultiLabelBinarizer(classes=range(int(num_classes)))
             label = str(label)
@@ -83,11 +86,12 @@ class ProteinDataset(Dataset):
 
         path_list = []
         for i in range(len(csv_data)):
-            path_list.append((csv_data.iloc[i].get('aa_seq'), csv_data.iloc[i].get('pdb_path'), csv_data.iloc[i]['label'], csv_data.iloc[i]['unique_id'], task_type, num_classes, csv_data.iloc[i].get('smiles'))) #列表里面必须是元组，不然debug模式下并行加载数据会报错
+            path_list.append((csv_data.iloc[i].get('aa_seq'), csv_data.iloc[i].get('pdb_path'), csv_data.iloc[i]['label'], csv_data.iloc[i].get('unique_id'), task_type, num_classes, csv_data.iloc[i].get('smiles'))) #列表里面必须是元组，不然debug模式下并行加载数据会报错
         
-        # path_list = path_list[:10] # this is for fast debug, please comment it in production
-        self.data = pmap_multi(read_data, path_list, n_jobs=-1)
+        path_list = path_list[:200] # this is for fast debug, please comment it in production
+        self.data = pmap_multi(read_data, path_list, n_jobs=1)
         self.data = [d for d in self.data if d is not None]
+        self.max_length = min(self.max_length, max([len(d['seq']) for d in self.data])+2)
         self.pretrain_model_interface = pretrain_model_interface
 
         if pretrain_model_interface is not None:
@@ -108,25 +112,30 @@ class ProteinDataset(Dataset):
     
     def __getitem__(self, idx):
         if self.pretrain_model_interface is not None:
-            if "pair" in self.task_type:
-                max_length_batch = 2*self.max_length
-            else: max_length_batch = self.max_length
+            max_length_batch = self.max_length
             name = self.data[idx]['name']
             embedding = self.pad_data(self.data[idx]['embedding'], dim=0, pad_value=0, max_length=max_length_batch)
             attention_mask = self.pad_data(self.data[idx]['attention_mask'], dim=0, pad_value=0, max_length=max_length_batch)
             label = self.data[idx]['label']
-            smiles = self.data[idx]['smiles']
+            
+
             if self.task_type == 'binary_classification':
                 label = label[None].float()
             if self.task_type == 'contact':
                 label = F.pad(label, [0, max_length_batch-label.shape[0],0, max_length_batch-label.shape[0]])
-            return {
+            
+            result = {
                 'name': name,
                 'embedding': embedding,
                 'attention_mask': attention_mask,
                 'label': label,
-                'smiles': smiles
             }
+            
+            if self.data[idx].get('smiles') is not None:
+                smiles = self.data[idx]['smiles']
+                result['smiles'] = smiles
+                
+            return result
         else:
             seq = self.data[idx]['seq']
             label = self.data[idx]['label']
