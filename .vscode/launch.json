@@ -24,8 +24,8 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--config_name", "material_production",
-                "--pretrain_model_name", "esm2_650m",
+                "--config_name", "antibiotic_resistance",
+                "--pretrain_model_name", "esm3_1.4b",
                 "--num_workers", "1",
             ],
             "env": {

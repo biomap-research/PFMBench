@@ -1,6 +1,8 @@
 import datetime
 import os
+import random
 import sys; sys.path.append("/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark")
+sys.path.append('/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom')
 # sys.path.append(os.getcwd())
 # os.environ["WANDB_API_KEY"] = "ddb1831ecbd2bf95c3323502ae17df6e1df44ec0" # gzy
 os.environ["WANDB_API_KEY"] = "ddb1831ecbd2bf95c3323502ae17df6e1df44ec0" # wh
@@ -15,6 +17,7 @@ from model_interface import MInterface
 from data_interface import DInterface
 import pytorch_lightning.loggers as plog
 from src.utils.logger import SetupCallback
+from pytorch_lightning.callbacks import EarlyStopping
 from src.utils.utils import process_args
 import math
 import wandb
@@ -88,6 +91,14 @@ def load_callbacks(args):
                 argv_content = sys.argv + ["gpus: {}".format(torch.cuda.device_count())],)
     )
     
+    early_stop_callback = EarlyStopping(
+        monitor=metric,   # 必须和你的 validation step log 出来的 key 一致
+        patience=5,
+        mode="min",           # loss 下降才是“好”，因此用 min
+        strict=True,
+    )
+    callbacks.append(early_stop_callback)
+    
     if args.lr_scheduler:
         callbacks.append(plc.LearningRateMonitor(
             logging_interval=None))
@@ -124,6 +135,9 @@ def main():
     args, logger = automl_setup(args, logger)
     #====================================================
     
+    # generated a random seed
+    args.seed = random.randint(1, 9999999)
+    print(f"Generated random seed: {args.seed}")
     pl.seed_everything(args.seed)
     data_module = DInterface(**vars(args))
     data_module.data_setup()

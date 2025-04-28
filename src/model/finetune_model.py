@@ -126,7 +126,7 @@ class UniModel(nn.Module):
             
             
         
-        if task_type == 'classification':
+        if task_type in ['classification', 'residual_classification']:
             self.task_head = nn.Linear(hid_dim, num_classes)
             self.loss = nn.CrossEntropyLoss()
         
@@ -168,6 +168,12 @@ class UniModel(nn.Module):
             if self.task_type == 'contact': # resideu-level
                 logits = self.task_head(proj_output)
                 loss = self.loss(logits, labels, batch['attention_mask'])
+                return {'loss': loss, 'logits': logits}
+            elif self.task_type == 'residual_classification': # resideu-level
+                logits = self.task_head(proj_output)
+                logits = logits[attention_mask]
+                labels = labels[attention_mask]
+                loss = self.loss(logits, labels)
                 return {'loss': loss, 'logits': logits}
             else: # sequence-level
                 pooled_output = torch.mean(proj_output, dim=1)
@@ -281,72 +287,128 @@ class ContactPredictionHead(nn.Module):
 class ContatcLoss(nn.Module):
     def __init__(self):
         super().__init__()
-    
-    def forward(self, logits, labels, mask):
-        pred = logits.contiguous().float().squeeze(0)
-        labels[labels>0] = -1
-        labels[labels==0] = 1
-        labels[labels==-1] = 0
-        
-        select = (mask[:,:,None]&mask[:,None])
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            pred[select].view(-1).contiguous(),
-            labels[select].view(-1).contiguous().float()
-        )
+
+    def forward(self, logits, labels, attn_masks):
+        """
+        logits: logits Tensor of shape (batch_size, L, L)
+        labels: Tensor of shape (batch_size, L, L)
+        attn_masks: Tensor of shape (batch_size, L)
+        """
+        logits = logits.squeeze(-1).float()
+        batch_size, L, _ = logits.shape
+
+        # Create pairwise mask from 1D attention mask
+        pairwise_mask = (attn_masks.unsqueeze(2) * attn_masks.unsqueeze(1)).bool()
+
+        # Exclude positions where |i - j| < 6
+        idxs = torch.arange(L, device=logits.device)
+        distance_mask = (idxs.unsqueeze(0) - idxs.unsqueeze(1)).abs() > 6
+
+        # Only consider upper triangle
+        upper_triangle_mask = torch.triu(torch.ones((L, L), dtype=torch.bool, device=logits.device), diagonal=1)
+
+        # Combine masks
+        final_mask = pairwise_mask & distance_mask.unsqueeze(0) & upper_triangle_mask.unsqueeze(0)
+
+        # Mask out invalid positions
+        logits = logits[final_mask]
+        labels = labels[final_mask]
+
+        # Flatten and compute BCEWithLogits loss
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels.float())
         return loss
+    
 
-def metric_eval(pred_y, y, inds, ls, lens):
-    tests = []
-    t_y = []
-    rs = []
-    for idx in inds:
-        row = idx // lens
-        col = idx % lens
-        if row >= col:
-            continue
-        if abs(row - col) <= 6:
-            continue
-        p = pred_y[idx]
-        gt = y[idx]
-        tests.append((p,gt))
-        if len(tests)>=ls:
-            break
-    cnt = 0
-    for p, gt in tests:
-        if gt == 1:
-            cnt += 1
-    return cnt, ls, cnt/ls
+# def metric_eval(pred_y, y, inds, ls, lens):
+#     tests = []
+#     t_y = []
+#     rs = []
+#     for idx in inds:
+#         row = idx // lens
+#         col = idx % lens
+#         if row >= col:
+#             continue
+#         if abs(row - col) <= 6:
+#             continue
+#         p = pred_y[idx]
+#         gt = y[idx]
+#         tests.append((p,gt))
+#         if len(tests)>=ls:
+#             break
+#     cnt = 0
+#     for p, gt in tests:
+#         if gt == 1:
+#             cnt += 1
+#     return cnt, ls, cnt/ls
 
-def contact_metrics(preds, labels, attn_masks):
-    '''
-    pred, label: [B, L,L]
-    '''
-    total_acc = 0
-    valid_samples = 0
-    for b in range(preds.shape[0]):
-        pred = preds[b][...,0]
-        label = labels[b]
-        mask = attn_masks[b]==1
-        pred = pred[:mask.sum(), :mask.sum()]
-        label = label[:mask.sum(), :mask.sum()]
-        # valid_idx = (mask[:,None]*mask[None]).nonzero(as_tuple=True)[0]
-        # length = len(valid_idx)
 
-        # if length < 2:
-        #     continue  # skip too-short sequences
-
-        # pred = preds[b][valid_idx][:, valid_idx]  # shape [L', L']
-        # label = labels[b][valid_idx][:, valid_idx]
+# def contact_metrics(preds, labels, attn_masks):
+#     '''
+#     pred, label: [B, L, L]
+#     '''
+#     total_acc = 0
+#     valid_samples = 0
+#     for b in range(preds.shape[0]):
+#         pred = preds[b]
+#         label = labels[b]
+#         mask = attn_masks[b]==1
+#         pred = pred[:mask.sum(), :mask.sum()]
+#         label = label[:mask.sum(), :mask.sum()]
         
-        
-        label[label>0] = -1
-        label[label==0] = 1
-        label[label==-1] = 0
-        pred = pred.reshape(-1)
-        label = label.reshape(-1)
-        indices = torch.argsort(-pred)
-        l = label.shape[-1]
-        _,_, acc = metric_eval(pred, label, indices, l//5, l)
-        total_acc += acc
-        valid_samples += 1
-    return {"Top(L/5)": total_acc / valid_samples if valid_samples > 0 else 0.0}
+#         label[label>0] = -1
+#         label[label==0] = 1
+#         label[label==-1] = 0
+#         pred = pred.reshape(-1)
+#         label = label.reshape(-1)
+#         indices = torch.argsort(-pred)
+#         l = label.shape[-1]
+#         _,_, acc = metric_eval(pred, label, indices, l//5, l)
+#         total_acc += acc
+#         valid_samples += 1
+#     return {"Top(L/5)": total_acc / valid_samples if valid_samples > 0 else 0.0}
+
+
+def top_L_div_5_precision(preds, labels, attn_masks):
+    """
+    preds: logits Tensor of shape (batch_size, L, L)
+    labels: Tensor of shape (batch_size, L, L)
+    attn_masks: Tensor of shape (batch_size, L)
+    """
+    batch_size, L, _ = preds.shape
+    precisions = []
+
+    # Precompute static masks
+    idxs = torch.arange(L, device=preds.device)
+    distance_mask = (idxs.unsqueeze(0) - idxs.unsqueeze(1)).abs() >= 6
+    upper_triangle_mask = torch.triu(torch.ones((L, L), dtype=torch.bool, device=preds.device), diagonal=1)
+    combined_static_mask = distance_mask & upper_triangle_mask
+
+    for b in range(batch_size):
+        pred = preds[b]  # (L, L)
+        label = labels[b]  # (L, L)
+        mask = attn_masks[b]  # (L,)
+
+        # Only consider valid positions
+        valid_mask = (mask.unsqueeze(0) * mask.unsqueeze(1)).bool()
+
+        combined_mask = valid_mask & combined_static_mask
+
+        pred_scores = pred[combined_mask].flatten()
+        true_labels = label[combined_mask].flatten()
+
+        # Apply sigmoid to logits to get probabilities
+        pred_probs = torch.sigmoid(pred_scores)
+
+        # Top L/5
+        num_top = max(1, L // 5)
+        if pred_probs.numel() < num_top:
+            num_top = pred_probs.numel()
+        topk = torch.topk(pred_probs, k=num_top)
+        top_indices = topk.indices
+
+        top_true = true_labels[top_indices]
+        precision = top_true.sum().float() / num_top
+        precisions.append(precision)
+
+    return {'Top(L/5)': torch.stack(precisions).mean()}
+

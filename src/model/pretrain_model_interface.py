@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import os
 from tqdm import tqdm
-from src.model.pretrain_modules import ESM2Model, SmilesModel
+from src.model.pretrain_modules import ESM2Model, SmilesModel, ESM3Model, ESMC600MModel, ProCyonModel, GearNetModel, ProLLAMAModel, ProSTModel, ProtGPT2Model, ProTrekModel, SaPortModel, VenusPLMModel, ProSST2048Model
 import sys; sys.path.append('/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom')
 MODEL_ZOOM_PATH = '/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom'
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -28,11 +28,39 @@ class PretrainModelInterface(nn.Module):
     def setup_model(self):
         """
         Setup the pre-trained model based on the specified name.
+        ['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm']
         """
         device = 'cuda'
         self.smiles_model = SmilesModel(device)
         if self.pretrain_model_name == 'esm2_650m':
             self.pretrain_model = ESM2Model(device)
+        elif self.pretrain_model_name == 'esm3_1.4b':
+            self.pretrain_model = ESM3Model(device)
+        elif self.pretrain_model_name == 'esmc_600m':
+            self.pretrain_model = ESMC600MModel(device)
+        elif self.pretrain_model_name == 'procyon':
+            self.pretrain_model = ProCyonModel(device)
+        elif self.pretrain_model_name == 'prollama':
+            self.pretrain_model = ProLLAMAModel(device)
+        elif self.pretrain_model_name == 'progen2':
+            self.pretrain_model = ProLLAMAModel(device)
+        elif self.pretrain_model_name == 'prostt5':
+            self.pretrain_model = ProSTModel(device)
+        elif self.pretrain_model_name == 'protgpt2':
+            self.pretrain_model = ProtGPT2Model(device)
+        elif self.pretrain_model_name == 'protrek':
+            self.pretrain_model = ProTrekModel(device)
+        elif self.pretrain_model_name == 'saport':
+            self.pretrain_model = SaPortModel(device)
+        elif self.pretrain_model_name == 'gearnet':
+            self.pretrain_model = GearNetModel(device)
+        elif self.pretrain_model_name == 'prost':
+            self.pretrain_model = ProSTModel(device)
+        elif self.pretrain_model_name == 'prosst2048':
+            self.pretrain_model = ProSST2048Model(device)
+        elif self.pretrain_model_name == 'venusplm':
+            self.pretrain_model = VenusPLMModel(device)
+        
         
     @torch.no_grad()
     def inference_datasets(self, data, task_name=None):

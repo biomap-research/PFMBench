@@ -20,7 +20,10 @@ def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles
             label = mlb.fit_transform([[int(ele) for ele in label.split(",")]]).flatten().tolist()
         
         if task_type == "contact":
-            label = torch.load(label)
+            label = torch.load(label, weights_only=True) # diable warning
+        
+        if task_type == "residual_classification":
+            label = torch.tensor(list(map(int, label.strip('[]').replace('\n', ' ').split())))
             
         name = str(hash(pdb_path))
         if pdb_path is not None:
@@ -89,7 +92,7 @@ class ProteinDataset(Dataset):
             path_list.append((csv_data.iloc[i].get('aa_seq'), csv_data.iloc[i].get('pdb_path'), csv_data.iloc[i]['label'], csv_data.iloc[i].get('unique_id'), task_type, num_classes, csv_data.iloc[i].get('smiles'))) #列表里面必须是元组，不然debug模式下并行加载数据会报错
         
         # path_list = path_list[:10] # this is for fast debug, please comment it in production
-        self.data = pmap_multi(read_data, path_list, n_jobs=1)
+        self.data = pmap_multi(read_data, path_list, n_jobs=-1)
         self.data = [d for d in self.data if d is not None]
         self.max_length = min(self.max_length, max([len(d['seq']) for d in self.data])+2)
         self.pretrain_model_interface = pretrain_model_interface
@@ -122,7 +125,10 @@ class ProteinDataset(Dataset):
             if self.task_type == 'binary_classification':
                 label = label[None].float()
             if self.task_type == 'contact':
-                label = F.pad(label, [0, max_length_batch-label.shape[0],0, max_length_batch-label.shape[0]])
+                label = (label == 0).int()
+                label = F.pad(label, [0, max_length_batch-label.shape[0], 0, max_length_batch-label.shape[0]])
+            if self.task_type == 'residual_classification': 
+                label = F.pad(label, [0, max_length_batch-label.shape[0]])
             
             result = {
                 'name': name,
