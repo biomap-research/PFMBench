@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import os
 from tqdm import tqdm
-from src.model.pretrain_modules import ESM2Model, SmilesModel, ESM3Model, ESMC600MModel, ProCyonModel, GearNetModel, ProLLAMAModel, ProSTModel, ProtGPT2Model, ProTrekModel, SaPortModel, VenusPLMModel, ProSST2048Model
+from src.model.pretrain_modules import ESM2Model, SmilesModel, ESM3Model, ESMC600MModel, ProCyonModel, GearNetModel, ProLLAMAModel, ProSTModel, ProtGPT2Model, ProTrekModel, SaPortModel, VenusPLMModel, ProSST2048Model, ProGen2Model, ProstT5Model
 import sys; sys.path.append('/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom')
 MODEL_ZOOM_PATH = '/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom'
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -43,9 +43,9 @@ class PretrainModelInterface(nn.Module):
         elif self.pretrain_model_name == 'prollama':
             self.pretrain_model = ProLLAMAModel(device)
         elif self.pretrain_model_name == 'progen2':
-            self.pretrain_model = ProLLAMAModel(device)
+            self.pretrain_model = ProGen2Model(device)
         elif self.pretrain_model_name == 'prostt5':
-            self.pretrain_model = ProSTModel(device)
+            self.pretrain_model = ProstT5Model(device)
         elif self.pretrain_model_name == 'protgpt2':
             self.pretrain_model = ProtGPT2Model(device)
         elif self.pretrain_model_name == 'protrek':
@@ -74,6 +74,11 @@ class PretrainModelInterface(nn.Module):
                     sample_B = {key: value for key, value in sample.items() if key != 'seq'}
                     sample_A['seq'] = sample['seq'].split('|')[0]
                     sample_B['seq'] = sample['seq'].split('|')[1]
+                    if 'pdb_path' in sample:
+                        sample_A['pdb_path'] = sample['pdb_path'].split('|')[0]
+                        sample_B['pdb_path'] = sample['pdb_path'].split('|')[1]
+                        sample_A['X'] = sample['X'][0]
+                        sample_B['X'] = sample['X'][1]
                     samples_A.append(sample_A)
                     samples_B.append(sample_B)
 
@@ -88,8 +93,8 @@ class PretrainModelInterface(nn.Module):
                         PAD = torch.ones_like(results_A[idx]['embedding'])[:1]
                         if key == 'embedding':
                             result[key] = torch.cat([results_A[idx]['embedding'], PAD, results_B[idx]['embedding']], dim=0)
-                        elif key == 'atttention_mask':
-                            result[key] = torch.cat([results_A[idx]['atttention_mask'], PAD, results_B[idx]['atttention_mask']], dim=0)==1
+                        elif key == 'attention_mask':
+                            result[key] = torch.cat([results_A[idx]['attention_mask'], torch.tensor([True]), results_B[idx]['attention_mask']], dim=0)==1
                         else:
                             result[key] = results_A[idx][key] 
                     results.append(result)
@@ -107,5 +112,3 @@ class PretrainModelInterface(nn.Module):
             
         return proccessed_data
             
-
-

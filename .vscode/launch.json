@@ -25,7 +25,7 @@
             "justMyCode": true,
             "args": [
                 "--config_name", "antibiotic_resistance",
-                "--pretrain_model_name", "esm3_1.4b",
+                "--pretrain_model_name", "protrek",
                 "--num_workers", "1",
             ],
             "env": {
