@@ -5,8 +5,8 @@ Output:
 
 Data:
   train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/DeepLoc2Multi/mmseq_outdir/train.csv"
-  val_data_path: "/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark/datasets/DeepLoc2Multi/mmseq_outdir/val.csv"
-  test_data_path: "/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark/datasets/DeepLoc2Multi/mmseq_outdir/test.csv"
+  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/DeepLoc2Multi/mmseq_outdir/val.csv"
+  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/DeepLoc2Multi/mmseq_outdir/test.csv"
 
 Training:
   epoch: 50  # end epoch

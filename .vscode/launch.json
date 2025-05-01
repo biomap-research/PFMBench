@@ -24,8 +24,8 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--config_name", "antibiotic_resistance",
-                "--pretrain_model_name", "protrek",
+                "--config_name", "enzyme_commission_number",
+                "--pretrain_model_name", "esm3_1.4b",
                 "--num_workers", "1",
             ],
             "env": {

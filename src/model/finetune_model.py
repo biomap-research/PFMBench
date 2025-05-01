@@ -63,6 +63,22 @@ class UniModel(nn.Module):
             if pretrain_model_name == 'prosst2048':
                 self.input_dim = 768
 
+            if pretrain_model_name == 'prott5':
+                self.input_dim = 1024
+            
+            if pretrain_model_name == 'dplm':
+                self.input_dim = 1280
+            
+            if pretrain_model_name == 'ontoprotein':
+                self.input_dim = 1024
+
+            if pretrain_model_name == 'ankh_base':
+                self.input_dim = 768
+                
+            if pretrain_model_name == 'pglm':
+                self.input_dim = 2048
+                
+
             self.smiles_proj = nn.Sequential(nn.Linear(2048, hid_dim),
                                       nn.GELU()
             )

@@ -4,9 +4,9 @@ Output:
   offline: ${eval:"int(${oc.env:OFFLINE, '1'})"}
 
 Data:
-  train_data_path: "/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark/datasets/DeepSoluE/mmseq_outdir/train.csv"
-  val_data_path: "/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark/datasets/DeepSoluE/mmseq_outdir/val.csv"
-  test_data_path: "/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark/datasets/DeepSoluE/mmseq_outdir/test.csv"
+  train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/DeepSoluE/mmseq_outdir/train.csv"
+  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/DeepSoluE/mmseq_outdir/val.csv"
+  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/DeepSoluE/mmseq_outdir/test.csv"
 
 Training:
   epoch: 50  # end epoch

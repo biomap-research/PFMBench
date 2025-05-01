@@ -43,7 +43,9 @@ class MInterface(MInterface_base):
         loss = ret['loss']
         log_dict = {'val_loss': loss}
         
-        if self.hparams.task_type in ["contact"]:
+        if self.hparams.task_type in [
+            "contact"
+        ]:
             self._context["validation"]["metric"].append(
                 self.metrics(
                 ret['logits'][...,0].float().cpu(),
@@ -51,10 +53,20 @@ class MInterface(MInterface_base):
                 batch['attention_mask'].float().cpu(),
                 name="valid"
             ))
+        elif self.hparams.task_type in [
+            "residual_classification"
+        ]:
+            self._context["validation"]["metric"].append(
+                self.metrics(
+                ret['logits'].float().cpu().numpy(),
+                batch['label'].float().cpu().numpy(),
+                batch['attention_mask'].float().cpu().numpy(),
+                name="valid"
+            ))
         else:
             self._context["validation"]["logits"].append(ret['logits'].float().cpu().numpy())
             self._context["validation"]["labels"].append(batch['label'].float().cpu().numpy())
-
+            
         self.log_dict(log_dict)
         return self.log_dict
 
@@ -65,6 +77,12 @@ class MInterface(MInterface_base):
         if self.hparams.task_type in ["contact"]:
             value = torch.tensor(self._context["validation"]["metric"]).mean()
             metric = {f"valid_Top(L/5)": value}
+            self._context["validation"]["metric"] = []
+        elif self.hparams.task_type in [
+            "residual_classification"
+        ]:
+            value = torch.tensor(self._context["validation"]["metric"]).mean()
+            metric = {f"valid_acc": value}
             self._context["validation"]["metric"] = []
         else:
             metric = self.metrics(
@@ -89,6 +107,16 @@ class MInterface(MInterface_base):
                 batch['attention_mask'].float().cpu(),
                 name="test"
             ))
+        elif self.hparams.task_type in [
+            "residual_classification"
+        ]:
+            self._context["test"]["metric"].append(
+                self.metrics(
+                ret['logits'].float().cpu().numpy(),
+                batch['label'].float().cpu().numpy(),
+                batch['attention_mask'].float().cpu().numpy(),
+                name="test"
+            ))
         else:
             self._context["test"]["logits"].append(ret['logits'].float().cpu().numpy())
             self._context["test"]["labels"].append(batch['label'].float().cpu().numpy())
@@ -101,6 +129,12 @@ class MInterface(MInterface_base):
         if self.hparams.task_type in ["contact"]:
             value = torch.tensor(self._context["test"]["metric"]).mean()
             metric = {f"test_Top(L/5)": value}
+            self._context["test"]["metric"] = []
+        elif self.hparams.task_type in [
+            "residual_classification"
+        ]:
+            value = torch.tensor(self._context["test"]["metric"]).mean()
+            metric = {f"test_acc": value}
             self._context["test"]["metric"] = []
         else:
             metric = self.metrics(
@@ -128,11 +162,11 @@ class MInterface(MInterface_base):
             target_valid = []
             for i in range(len(target)):
                 target_valid.append(target[i][attn_mask[i].astype(bool)])
-                
             preds, target = np.vstack(preds), np.hstack(target_valid) 
             preds = np.argmax(preds, axis=-1)
             acc = (preds == target).mean()
-            return {f"{name}_acc": acc}
+            return acc
+            # return {f"{name}_acc": acc}
         elif self.hparams.task_type in ["binary_classification", "pair_binary_classification"]:
             preds, target = np.vstack(preds), np.concatenate(target, axis=0) 
             auroc = roc_auc_score(target, preds)

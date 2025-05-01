@@ -1,9 +1,14 @@
+import sys; sys.path.append('/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom')
 import torch
 import torch.nn as nn
 import os
 from tqdm import tqdm
-from src.model.pretrain_modules import ESM2Model, SmilesModel, ESM3Model, ESMC600MModel, ProCyonModel, GearNetModel, ProLLAMAModel, ProSTModel, ProtGPT2Model, ProTrekModel, SaPortModel, VenusPLMModel, ProSST2048Model, ProGen2Model, ProstT5Model
-import sys; sys.path.append('/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom')
+from src.model.pretrain_modules import (
+    ESM2Model, SmilesModel, ESM3Model, ESMC600MModel, ProCyonModel, 
+    GearNetModel, ProLLAMAModel, ProSTModel, ProtGPT2Model, ProTrekModel, 
+    SaPortModel, VenusPLMModel, ProSST2048Model, ProGen2Model, ProstT5Model, 
+    ProtT5, DPLMModel, OntoProteinModel, ANKHBase, PGLMModel
+)
 MODEL_ZOOM_PATH = '/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom'
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
@@ -60,7 +65,16 @@ class PretrainModelInterface(nn.Module):
             self.pretrain_model = ProSST2048Model(device)
         elif self.pretrain_model_name == 'venusplm':
             self.pretrain_model = VenusPLMModel(device)
-        
+        elif self.pretrain_model_name == 'prott5':
+            self.pretrain_model = ProtT5(device)
+        elif self.pretrain_model_name == 'dplm':
+            self.pretrain_model = DPLMModel(device)
+        elif self.pretrain_model_name == 'ontoprotein':
+            self.pretrain_model = OntoProteinModel(device)
+        elif self.pretrain_model_name == "ankh_base":
+            self.pretrain_model = ANKHBase(device)
+        elif self.pretrain_model_name == "pglm":
+            self.pretrain_model = PGLMModel(device)
         
     @torch.no_grad()
     def inference_datasets(self, data, task_name=None):

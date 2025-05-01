@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 import os
+import numpy as np
 import torch.nn.functional as F
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -60,8 +61,13 @@ class UtilsModel:
             data = self.dynamic_pad(data, [0, max_length-data.shape[dim]], dim=dim, pad_value=pad_value)
         else:
             # start = torch.randint(0, data.shape[0]-self.max_length+1, (1,)).item()
+            # start = torch.randint(0, data.shape[0]-self.max_length+1, (1,)).item()
             start = 0
-            data = data[start:start+max_length]
+            end = start + max_length
+            # 构建切片列表，对其他维度用 slice(None)，目标维度用 slice(start, end)
+            slices = [slice(None)] * data.ndim
+            slices[dim] = slice(start, end)
+            data = data[tuple(slices)]  # 正确应用多维切片
         return data
 
     def dynamic_pad(self, tensor, pad_size, dim=0, pad_value=0):
@@ -90,7 +96,7 @@ class ESM2Model(BaseProteinModel, UtilsModel):
 
     def construct_batch(self, batch):
         MAXLEN = self.max_length
-        max_length_batch = max([len(sample['seq']) for sample in batch]) + 2 # +2 for <s> and </s>
+        max_length_batch = min(max([len(sample['seq']) for sample in batch]) + 2, self.max_length + 2) # +2 for <s> and </s>
         result = {
             'name': [],
             'seq': [],
@@ -142,8 +148,11 @@ class SmilesModel(BaseProteinModel, UtilsModel):
         result = {'smiles': []}
         for sample in batch:
             mol = Chem.MolFromSmiles(sample['smiles'])
-            fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
-            smiles = torch.tensor([int(ele) for ele in list(fp.ToBitString())]).float()
+            if mol is not None:
+                fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+                smiles = torch.tensor([int(ele) for ele in list(fp.ToBitString())]).float()
+            else:
+                smiles = torch.tensor([0]*2048).float()
             result['smiles'].append(smiles)
         return result
     
@@ -163,7 +172,7 @@ class ESM3Model(BaseProteinModel, UtilsModel):
         from model_zoom.esm.utils.misc import stack_variable_length_tensors
         addBOS = 1
         pad_id = self.model.tokenizers.sequence.pad_token_id
-        max_len = max([len(s['seq']) for s in batch]) + 2*addBOS
+        max_len = min(max([len(s['seq']) for s in batch]) + 2*addBOS, self.max_length + 2*addBOS)
         names, prot_tensors, labels, masks = [], [], [], []
         sequence_list, coordinates_list, structure_tokens_batch = [], [], []
         for sample in batch:
@@ -173,11 +182,12 @@ class ESM3Model(BaseProteinModel, UtilsModel):
             # tokenize
             seq_tok = encoding.tokenize_sequence(seq, seq_tokenizer, add_special_tokens=True)
             coords_tok, _plddt, struct_tok = encoding.tokenize_structure(
-                            coords, 
+                            np.array(coords), 
                             self.model.get_structure_encoder(), 
                             struct_tokenizer, 
                             add_special_tokens=True
                         )
+            coords_tok, struct_tok = torch.tensor(coords_tok), torch.tensor(struct_tok)
             mask = torch.zeros(max_len)
             mask[:seq_tok.shape[0]] = 1
             seq_tok = self.pad_data(seq_tok, dim=0, pad_value=pad_id, max_length=max_len)
@@ -240,7 +250,7 @@ class ESMC600MModel(BaseProteinModel, UtilsModel):
         from model_zoom.esm.utils.misc import stack_variable_length_tensors
         addBOS = 1
         pad_id = self.model.tokenizer.pad_token_id
-        max_len = max([len(s['seq']) for s in batch]) + 2*addBOS
+        max_len = min(max([len(s['seq']) for s in batch]) + 2*addBOS, self.max_length+2*addBOS)
         names, prots, masks, labels = [], [], [], []
         token_ids_list = []
         for sample in batch:
@@ -315,24 +325,28 @@ class ProCyonModel(BaseProteinModel, UtilsModel):
     def construct_batch(self, batch):
         names, seqs, structs, labels = [], [], [], []
         for sample in batch:
-            seqs_list = sample['seq'] if isinstance(sample['seq'], list) else [sample['seq']]
-            pdbs = sample['pdb_path'] if isinstance(sample['pdb_path'], list) else [sample['pdb_path']]
-            seq_embs, struct_embs = [], []
-            for s, p in zip(seqs_list, pdbs):
-                toks = self.esm_tokenizer([s], return_tensors='pt', padding=True, max_length=self.max_length, truncation=True)
-                out = self.esm_pretrain_model.esm(toks.input_ids.to(self.device), attention_mask=toks.attention_mask.to(self.device), return_dict=True)
-                seq_embs.append(out.last_hidden_state.squeeze(0).mean(0))
-                prot = Protein.from_pdb(p, bond_feature="length", residue_feature="symbol")
-                prot = self.transform({"graph": prot})["graph"]
-                packed = Protein.pack([prot])
-                protein = self.graph_construction_model(packed).to(self.device)
-                with torch.no_grad():
-                    gea = self.gearnet_edge(protein, protein.node_feature.float())
-                struct_embs.append(gea["graph_feature"].flatten())
-            names.append(sample['name'])
-            seqs.append(torch.cat(seq_embs, dim=-1))
-            structs.append(torch.cat(struct_embs, dim=-1))
-            labels.append(sample['label'])
+            try:
+                seqs_list = sample['seq'] if isinstance(sample['seq'], list) else [sample['seq']]
+                pdbs = sample['pdb_path'] if isinstance(sample['pdb_path'], list) else [sample['pdb_path']]
+                seq_embs, struct_embs = [], []
+                for s, p in zip(seqs_list, pdbs):
+                    toks = self.esm_tokenizer([s], return_tensors='pt', padding=True, max_length=self.max_length, truncation=True)
+                    out = self.esm_pretrain_model.esm(toks.input_ids.to(self.device), attention_mask=toks.attention_mask.to(self.device), return_dict=True)
+                    seq_embs.append(out.last_hidden_state.squeeze(0).mean(0))
+                    prot = Protein.from_pdb(p, bond_feature="length", residue_feature="symbol")
+                    prot = self.transform({"graph": prot})["graph"]
+                    packed = Protein.pack([prot])
+                    protein = self.graph_construction_model(packed).to(self.device)
+                    with torch.no_grad():
+                        gea = self.gearnet_edge(protein, protein.node_feature.float())
+                    struct_embs.append(gea["graph_feature"].flatten())
+                names.append(sample['name'])
+                seqs.append(torch.cat(seq_embs, dim=-1))
+                structs.append(torch.cat(struct_embs, dim=-1))
+                labels.append(sample['label'])
+            except Exception as e:
+                print(f"Error processing sample {sample['name']}: {e}")
+                continue
         return {
             'name': names,
             'seq': torch.stack(seqs).to(self.device),
@@ -382,30 +396,34 @@ class GearNetModel(BaseProteinModel, UtilsModel):
     def construct_batch(self, batch):
         names, embeddings, attention_masks, labels = [], [], [], []
         for sample in batch:
-            pdbs = sample['pdb_path'] if isinstance(sample['pdb_path'], list) else [sample['pdb_path']]
-            prots = []
-            for p in pdbs:
-                pr = Protein.from_pdb(p, bond_feature="length", residue_feature="symbol")
-                prots.append(self.transform({"graph": pr})["graph"])
+            try:
+                pdbs = sample['pdb_path'] if isinstance(sample['pdb_path'], list) else [sample['pdb_path']]
+                prots = []
+                for p in pdbs:
+                    pr = Protein.from_pdb(p, bond_feature="length", residue_feature="symbol")
+                    prots.append(self.transform({"graph": pr})["graph"])
 
-            pack = Protein.pack(prots)
-            max_res = pack.num_residues.max().item() 
-            gc = self.graph_construction(pack.to(self.device))
-            node = self.gearnet(gc.to(self.device), gc.node_feature.float().to(self.device))["node_feature"]
-            splits = torch.cumsum(F.pad(pack.num_residues, (1,0)), dim=0)
-            attention_mask = torch.zeros(len(splits)-1, max_res).to(self.device)
-            embeddings_temp = []
-            for i in range(len(splits)-1):
-                start, end = splits[i], splits[i+1]
-                embedding = node[start:end]
-                attention_mask[i, :embedding.shape[0]] = 1
-                embedding = self.pad_data(embedding, dim=0, max_length=max_res)
-                embeddings_temp.append(embedding)
-            embeddings_temp = torch.stack(embeddings_temp)
-            embeddings.append(embeddings_temp)
-            attention_masks.append(attention_mask)
-            labels.append(sample['label'])
-            names.append(sample['name'])
+                pack = Protein.pack(prots)
+                max_res = pack.num_residues.max().item() 
+                gc = self.graph_construction(pack.to(self.device))
+                node = self.gearnet(gc.to(self.device), gc.node_feature.float().to(self.device))["node_feature"]
+                splits = torch.cumsum(F.pad(pack.num_residues, (1,0)), dim=0)
+                attention_mask = torch.zeros(len(splits)-1, max_res).to(self.device)
+                embeddings_temp = []
+                for i in range(len(splits)-1):
+                    start, end = splits[i], splits[i+1]
+                    embedding = node[start:end]
+                    attention_mask[i, :embedding.shape[0]] = 1
+                    embedding = self.pad_data(embedding, dim=0, max_length=max_res)
+                    embeddings_temp.append(embedding)
+                embeddings_temp = torch.stack(embeddings_temp)
+                embeddings.append(embeddings_temp)
+                attention_masks.append(attention_mask)
+                labels.append(sample['label'])
+                names.append(sample['name'])
+            except Exception as e:
+                print(f"Error processing sample {sample['name']}: {e}")
+                continue
         
         max_len = max([one.shape[1] for one in embeddings])
         
@@ -437,7 +455,10 @@ class ProLLAMAModel(BaseProteinModel, UtilsModel):
         self.max_length = max_length
 
     def construct_batch(self, batch):
-        max_len = max(len(s) for sample in batch for s in (sample['seq'] if isinstance(sample['seq'], list) else [sample['seq']])) + 2
+        max_len = min(
+            max(len(s) for sample in batch for s in (sample['seq'] if isinstance(sample['seq'], list) else [sample['seq']])) + 2,
+            self.max_length + 2
+        )
         names, seqs, masks, labels = [], [], [], []
         for sample in batch:
             seqs_list = sample['seq'] if isinstance(sample['seq'], list) else [sample['seq']]
@@ -544,7 +565,7 @@ class ProGen2Model(BaseProteinModel, UtilsModel):
 class ProstT5Model(BaseProteinModel, UtilsModel):
     def __init__(self, device, max_length=1022, sequence_only=False):
         super().__init__(device)
-        self.tokenizer = T5Tokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/ProstT5", do_lower_case=False)
+        self.tokenizer = T5Tokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/ProstT5", do_lower_case=False, legacy=False)
         self.model = T5EncoderModel.from_pretrained(f"{MODEL_ZOOM_PATH}/ProstT5").to(self.device)
         self.encoder_3di = mini3di.Encoder()
         self.max_length = max_length
@@ -552,7 +573,10 @@ class ProstT5Model(BaseProteinModel, UtilsModel):
 
     def construct_batch(self, batch):
         import re
-        max_length_batch = max([len(sample['seq']) for sample in batch]) + 2
+        max_length_batch = min(
+            max([len(sample['seq']) for sample in batch]) + 2,
+            self.max_length + 2
+        )
         names, seqs, masks, labels = [], [], [], []
         seq_tokens, attention_masks = [], []
         for sample in batch:
@@ -667,9 +691,13 @@ class ProTrekModel(BaseProteinModel, UtilsModel):
 
     def construct_batch(self, batch):
         names, seqs, structs, masks, labels = [], [], [], [], []
-        max_length_batch = max([len(sample['seq']) for sample in batch]) + 2
+        max_length_batch = min(
+            max([len(sample['seq']) for sample in batch]) + 2,
+            self.max_length + 2
+        )
         for sample in batch:
             seq = sample['seq']; X = sample['X']
+            if X is None: continue
             N, CA, C, CB = X[:,0], X[:,1], X[:,2], X[:,3]
             states = self.encoder_3di.encode_atoms(ca=CA.numpy(), cb=CB.numpy(), n=N.numpy(), c=C.numpy())
             struct_seq = self.encoder_3di.build_sequence(states).lower()
@@ -713,7 +741,10 @@ class SaPortModel(BaseProteinModel, UtilsModel):
 
     def construct_batch(self, batch):
         names, seqs, masks, labels = [], [], [], []
-        max_len = max([len(s['seq']) for s in batch]) + 2
+        max_len = min(
+            max([len(s['seq']) for s in batch]) + 2,
+            self.max_length + 2
+        )
         for sample in batch:
             seq, X = sample['seq'], sample['X']
             N, CA, C, CB = X[:,0], X[:,1], X[:,2], X[:,3]
@@ -734,7 +765,7 @@ class SaPortModel(BaseProteinModel, UtilsModel):
             'name': names,
             'seq': torch.stack(seqs).to(self.device),
             'attention_mask': torch.stack(masks).to(self.device),
-            'label': torch.stack(labels)
+            'label': labels
         }
 
     def forward(self, batch, post_process=True, task_type='binary_classification'):
@@ -759,7 +790,10 @@ class VenusPLMModel(BaseProteinModel, UtilsModel):
 
     def construct_batch(self, batch):
         names, seqs, masks, labels = [], [], [], []
-        max_len = max([len(self.tokenizer.encode(s['seq'])) for s in batch]) + 2
+        max_len = min(
+            max([len(self.tokenizer.encode(s['seq'])) for s in batch]) + 2,
+            self.max_length + 2
+        )
         for sample in batch:
             seq = sample['seq']
             seq_tokens = torch.tensor(self.tokenizer.encode(seq))[:self.max_length]
@@ -777,7 +811,7 @@ class VenusPLMModel(BaseProteinModel, UtilsModel):
             'name': names,
             'seq': torch.stack(seqs).to(self.device),
             'attention_mask': torch.stack(masks).to(self.device),
-            'label': torch.stack(labels)
+            'label': labels
         }
 
     def forward(self, batch, post_process=True, task_type='binary_classification'):
@@ -802,13 +836,14 @@ class ProSST2048Model(BaseProteinModel, UtilsModel):
         self.max_length = max_length
 
     def construct_batch(self, batch):
-        max_len = max([len(s['seq']) for s in batch]) + 2
+        max_len = min(max([len(s['seq']) for s in batch]) + 2, self.max_length + 2)
         names, seqs, xs, masks, labels = [], [], [], [], []
         for sample in batch:
             seq = sample['seq']
             pdb_path = sample['pdb_path']
+            pdb_name = os.path.basename(pdb_path)
             seq_tokens = torch.tensor(self.tokenizer.encode(seq))[:self.max_length]
-            struct = self.quantizer(pdb_path, return_residue_seq=False)['2048']['ranked_unrelax_0.pdb']["struct"]
+            struct = self.quantizer(pdb_path, return_residue_seq=False)['2048'][pdb_name]["struct"]
             struct_seq = [i + 3 for i in struct]
             struct_seq = [1] + struct_seq + [2]
             struct_tokens = torch.tensor(struct_seq)[:self.max_length]
@@ -826,7 +861,7 @@ class ProSST2048Model(BaseProteinModel, UtilsModel):
             'seq': torch.stack(seqs).to(self.device),
             'X': torch.stack(xs).to(self.device),
             'attention_mask': torch.stack(masks).to(self.device),
-            'label': torch.stack(labels)
+            'label': labels
         }
 
     def forward(self, batch, post_process=True, task_type='binary_classification'):
@@ -842,3 +877,280 @@ class ProSST2048Model(BaseProteinModel, UtilsModel):
         if post_process:
             return self.post_process_cpu(batch, embeddings, batch['attention_mask'], start, ends, task_type)
         return embeddings
+
+
+# ProtTrans https://github.com/agemagician/ProtTrans
+class ProtT5(BaseProteinModel, UtilsModel):
+    def __init__(self, device, max_length=1022):
+        super().__init__(device)
+        from transformers import T5Tokenizer, T5EncoderModel
+        weight_path = f"{MODEL_ZOOM_PATH}/ProtT5"
+        self.tokenizer = T5Tokenizer.from_pretrained(weight_path, do_lower_case=False)
+        self.model = T5EncoderModel.from_pretrained(weight_path).to(device)
+        self.max_length = max_length
+
+    def construct_batch(self, batch):
+        max_len = min(max([len(s['seq']) for s in batch]) + 2, self.max_length + 2)
+        # max_len = min(max([len(s['seq']) for s in batch]), self.max_length) + 2
+        names, seqs, masks, labels = [], [], [], []
+        for sample in batch:
+            seq = " ".join(list(sample['seq'][:1022]))
+            seq_tokens = torch.tensor(self.tokenizer.encode(seq, add_special_tokens=False))[:self.max_length]
+            attention_mask = torch.zeros(max_len, dtype=torch.bool)
+            attention_mask[:len(seq_tokens)] = True
+            seq_tokens = self.pad_data(seq_tokens, dim=0, max_length=max_len)
+            names.append(sample['name'])
+            seqs.append(seq_tokens)
+            masks.append(attention_mask)
+            labels.append(torch.tensor(sample['label']))
+        return {
+            'name': names,
+            'seq': torch.stack(seqs).to(self.device),
+            'attention_mask': torch.stack(masks).to(self.device),
+            'label': labels
+        }
+
+    def forward(self, batch, post_process=True, task_type='binary_classification'):
+        embedding_repr = self.model(
+            input_ids=batch['seq'],
+            attention_mask=batch['attention_mask'],
+        )
+        embeddings = embedding_repr.last_hidden_state
+        ends = batch['attention_mask'].sum(dim=-1) - 1
+        start = 1
+        if post_process:
+            return self.post_process_cpu(batch, embeddings, batch['attention_mask'], start, ends, task_type)
+        return embeddings
+
+class DPLMModel(BaseProteinModel, UtilsModel):
+    def __init__(self, device, max_length=1022, **kwargs):
+        super().__init__(device)
+        from transformers import AutoTokenizer, AutoModelForMaskedLM
+        self.pretrain_model = AutoModelForMaskedLM.from_pretrained(f"{MODEL_ZOOM_PATH}/esm2_650m").to(self.device)
+        params = torch.load(f'{MODEL_ZOOM_PATH}/dplm_650m/pytorch_model.bin')
+        self.pretrain_model.load_state_dict(params, strict=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/esm2_650m")
+        self.max_length = max_length
+
+    def construct_batch(self, batch):
+        MAXLEN = self.max_length
+        max_length_batch = min(
+            max([len(sample['seq']) for sample in batch]) + 2,  # +2 for <s> and </s>
+            self.max_length + 2
+        )
+        result = {
+            'name': [],
+            'seq': [],
+            'attention_mask': [],
+            'label': []
+        }
+        for sample in batch:
+            seq_token = torch.tensor(self.tokenizer.encode(sample['seq']))[:MAXLEN]
+            attention_mask = torch.zeros(max_length_batch)
+            attention_mask[:len(seq_token)] = 1
+            seq_token = self.pad_data(seq_token, dim=0, max_length=max_length_batch)
+            result['name'].append(sample['name'])
+            result['seq'].append(seq_token)
+            result['attention_mask'].append(attention_mask)
+            result['label'].append(sample['label'])
+
+        result['seq'] = torch.stack(result['seq'], dim=0).to(self.device)
+        result['attention_mask'] = torch.stack(result['attention_mask'], dim=0).to(self.device)
+            
+        return result
+
+    def forward(self, batch, post_process=True, task_type='binary_classification', return_prob=False):
+        attention_mask = batch['attention_mask']
+        outputs = self.pretrain_model.esm(
+                        batch['seq'],
+                        attention_mask=attention_mask,
+                        return_dict=True,
+                    )
+        if return_prob:
+            logits = self.pretrain_model.lm_head(outputs.last_hidden_state)
+            probs = F.softmax(logits, dim=-1)
+            return probs
+        
+        embeddings = outputs.last_hidden_state
+        ends = attention_mask.sum(dim=-1)-1
+        start = 1
+        if post_process:
+            result = self.post_process_cpu(batch, embeddings, attention_mask, start, ends, task_type=task_type)
+        else:
+            result = embeddings
+        return result
+
+class OntoProteinModel(BaseProteinModel, UtilsModel):
+    def __init__(self, device, max_length=1022, **kwargs):
+        super().__init__(device)
+        from transformers import AutoTokenizer, AutoModelForMaskedLM
+        self.tokenizer = AutoTokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/OntoProtein")
+        self.model = AutoModelForMaskedLM.from_pretrained(f"{MODEL_ZOOM_PATH}/OntoProtein").to(self.device)
+        self.max_length = max_length
+
+    def construct_batch(self, batch):
+        import re
+        MAXLEN = self.max_length
+        max_length_batch = min(
+            max([len(sample['seq']) for sample in batch]) + 2, # +2 for <s> and </s>
+            MAXLEN + 2
+        )
+        result = {
+            'name': [],
+            'seq': [],
+            'attention_mask': [],
+            'token_type_ids': [],
+            'label': []
+        }
+        for sample in batch:
+            sequence_Example = ' '.join(sample['seq'])
+            sequence_Example = re.sub(r"[UZOB]", "X", sequence_Example)
+            encoded_input = self.tokenizer(sequence_Example, return_tensors='pt')
+            
+            input_ids = self.pad_data(encoded_input['input_ids'][0], dim=0, max_length=max_length_batch)
+            attention_mask = self.pad_data(encoded_input['attention_mask'][0], dim=0, max_length=max_length_batch)
+            token_type_ids = self.pad_data(encoded_input['token_type_ids'][0], dim=0, max_length=max_length_batch)
+            
+            
+            result['name'].append(sample['name'])
+            result['seq'].append(input_ids)
+            result['attention_mask'].append(attention_mask)
+            result['token_type_ids'].append(token_type_ids)
+            result['label'].append(sample['label'])
+
+        result['seq'] = torch.stack(result['seq'], dim=0).to(self.device)
+        result['attention_mask'] = torch.stack(result['attention_mask'], dim=0).to(self.device)
+        result['token_type_ids'] = torch.stack(result['token_type_ids'], dim=0).to(self.device)
+            
+        return result
+
+    def forward(self, batch, post_process=True, task_type='binary_classification', return_prob=False):
+        output = self.model.bert(
+            input_ids=batch['seq'],
+            attention_mask=batch['attention_mask'],
+            token_type_ids=batch['token_type_ids'],
+        )
+        if return_prob:
+            logits = self.model.cls(output.last_hidden_state)
+            probs = F.softmax(logits, dim=-1)
+            return probs
+        
+        attention_mask = batch['attention_mask']    
+        embeddings = output.last_hidden_state
+        ends = attention_mask.sum(dim=-1)-1
+        start = 1
+        if post_process:
+            result = self.post_process_cpu(batch, embeddings, attention_mask, start, ends, task_type=task_type)
+        else:
+            result = embeddings
+        return result
+
+
+class ANKHBase(BaseProteinModel, UtilsModel):
+    def __init__(self, device, max_length=1022):
+        super().__init__(device)
+        from transformers import AutoTokenizer, T5EncoderModel
+        weight_path = f"{MODEL_ZOOM_PATH}/ankh_base"
+        self.tokenizer = AutoTokenizer.from_pretrained(weight_path)
+        self.model = T5EncoderModel.from_pretrained(weight_path).to(device)
+        self.max_length = max_length
+
+    def construct_batch(self, batch):
+        max_len = min(max([len(s['seq']) for s in batch]) + 2, self.max_length + 2)
+        names, seqs, masks, labels = [], [], [], []
+        for sample in batch:
+            seq = sample['seq'][:1022]
+            seq_tokens = torch.tensor(self.tokenizer.encode(seq, add_special_tokens=False))[:self.max_length]
+            attention_mask = torch.zeros(max_len, dtype=torch.bool)
+            attention_mask[:len(seq_tokens)] = True
+            seq_tokens = self.pad_data(seq_tokens, dim=0, max_length=max_len)
+            names.append(sample['name'])
+            seqs.append(seq_tokens)
+            masks.append(attention_mask)
+            labels.append(torch.tensor(sample['label']))
+
+        return {
+            'name': names,
+            'seq': torch.stack(seqs).to(self.device),
+            'attention_mask': torch.stack(masks).to(self.device),
+            'label': labels
+        }
+
+    def forward(self, batch, post_process=True, task_type='binary_classification'):
+        embedding_repr = self.model(
+            input_ids=batch['seq'],
+            attention_mask=batch['attention_mask'],
+        )
+        embeddings = embedding_repr.last_hidden_state
+        ends = batch['attention_mask'].sum(dim=-1) - 1
+        start = 1
+        if post_process:
+            return self.post_process_cpu(batch, embeddings, batch['attention_mask'], start, ends, task_type)
+        return embeddings
+
+class PGLMModel(BaseProteinModel, UtilsModel):
+    def __init__(self, device, max_length=1022, **kwargs):
+        super().__init__(device)
+        from transformers import AutoTokenizer, AutoModelForMaskedLM
+        self.tokenizer  = AutoTokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/proteinglm-1b-mlm", trust_remote_code=True, use_fast=True)
+        self.model = AutoModelForMaskedLM.from_pretrained(f"{MODEL_ZOOM_PATH}/proteinglm-1b-mlm",  trust_remote_code=True).to(self.device)
+        self.max_length = max_length
+
+    def construct_batch(self, batch):
+        MAXLEN = self.max_length
+        max_length_batch = min(
+            max([len(sample['seq']) for sample in batch]) + 2, # +2 for <s> and </s>
+            self.max_length + 2
+        )
+        result = {
+            'name': [],
+            'seq': [],
+            'attention_mask': [],
+            'label': []
+        }
+        for sample in batch:
+            output = self.tokenizer(sample['seq'], add_special_tokens=True, return_tensors='pt')
+            seq_token = output['input_ids'][0]
+            attention_mask = torch.zeros(max_length_batch)
+            attention_mask[:len(seq_token)] = 1
+            seq_token = self.pad_data(seq_token, dim=0, max_length=max_length_batch)
+            result['name'].append(sample['name'])
+            result['seq'].append(seq_token)
+            result['attention_mask'].append(attention_mask)
+            result['label'].append(sample['label'])
+
+        result['seq'] = torch.stack(result['seq'], dim=0).to(self.device)
+        result['attention_mask'] = torch.stack(result['attention_mask'], dim=0).to(self.device)
+            
+        return result
+
+    def forward(self, batch, post_process=True, task_type='binary_classification', return_prob=False):
+        attention_mask = batch['attention_mask']
+        outputs = self.model(
+                        batch['seq'],
+                        attention_mask=batch['attention_mask'],
+                        output_hidden_states=True, return_last_hidden_state=True
+                    )
+        if return_prob:
+            logits = self.pretrain_model.lm_head(outputs.last_hidden_state)
+            probs = F.softmax(logits, dim=-1)
+            return probs
+        
+        embeddings = outputs.hidden_states.permute(1,0,2)
+        ends = attention_mask.sum(dim=-1)-1
+        start = 1
+        if post_process:
+            result = self.post_process_cpu(batch, embeddings, attention_mask, start, ends, task_type=task_type)
+        else:
+            result = embeddings
+        return result
+
+# TODO: 
+# ProtTrans https://github.com/agemagician/ProtTrans --> OK
+# xTrimoPGLM https://github.com/ONERAI/xTrimoPGLM
+# Ankh https://github.com/agemagician/Ankh --> OK
+# ProteinBERT https://github.com/nadavbra/protein_bert --> keras模型, 不必整合
+# IgLM https://github.com/Graylab/IgLM --> 小模型, 不必整合
+# OntoProtein https://github.com/zjunlp/OntoProtein --> OK
+# ABGNN https://github.com/KyGao/ABGNN --> 不必整合
+# DPLM  https://github.com/bytedance/dplm --> OK

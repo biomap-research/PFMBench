@@ -4,9 +4,9 @@ Output:
   offline: ${eval:"int(${oc.env:OFFLINE, '1'})"}
 
 Data:
-  train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/pdbind_train.csv"
-  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/pdbind_valid.csv"
-  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/pdbind_test.csv"
+  train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/mmseq_outdir/train.csv"
+  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/mmseq_outdir/val.csv"
+  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/mmseq_outdir/test.csv"
 
 Training:
   epoch: 50  # end epoch
