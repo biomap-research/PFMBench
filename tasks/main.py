@@ -49,7 +49,7 @@ def create_parser():
     parser.add_argument('--sequence_only', default=0, type=int)
     parser.add_argument('--finetune_type', default='adapter', type=str, choices=['adapter', 'peft'])
     parser.add_argument('--peft_type', default='adalora', type=str, choices=['lora', 'adalora', 'ia3', 'prefix_tuning', 'freeze'])
-    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm', 'prott5', 'dplm', 'ontoprotein', 'ankh_base', 'pglm'])
+    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm', 'prott5', 'dplm', 'ontoprotein', 'ankh_base', 'pglm', 'esm2_35m', 'esm2_150m', 'esm2_3b',  'esm2_15b', 'protrek_35m'])
     parser.add_argument("--config_name", type=str, default='fitness_prediction', help="Name of the Hydra config to use")
    
     args = process_args(parser, config_path='../../tasks/configs')
@@ -152,7 +152,7 @@ def main():
     callbacks = load_callbacks(args)
     trainer_config = {
         "accelerator": "gpu",
-        'devices': args.gpus_per_node,  # Use all available GPUs
+        'devices': gpu_count,  # Use gpu count
         'max_epochs': args.epoch,  # Maximum number of epochs to train for
         'num_nodes': args.num_nodes,  # Number of nodes to use for distributed training
         "strategy": 'deepspeed_stage_2', # 'ddp', 'deepspeed_stage_2

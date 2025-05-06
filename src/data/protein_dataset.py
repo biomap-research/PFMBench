@@ -33,8 +33,8 @@ def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles
                 # TODO
                 return {
                     'name':name, 
-                    'seq': structure.sequence, # aaseq
-                    # 'seq': aa_seq, # aaseq
+                    # 'seq': structure.sequence, # aaseq
+                    'seq': aa_seq, # aaseq
                     'X': structure.coordinates, 
                     'label': label, 
                     'unique_id': unique_id, 

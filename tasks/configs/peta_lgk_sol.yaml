@@ -4,9 +4,9 @@ Output:
   offline: ${eval:"int(${oc.env:OFFLINE, '1'})"}
 
 Data:
-  train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/PETA_CHS_Sol/train.csv"
-  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/PETA_CHS_Sol/valid.csv"
-  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/PETA_CHS_Sol/test.csv"
+  train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/PETA_LGK_Sol/train.csv"
+  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/PETA_LGK_Sol/valid.csv"
+  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/PETA_LGK_Sol/test.csv"
 
 Training:
   epoch: 50  # end epoch

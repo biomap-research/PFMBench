@@ -39,6 +39,14 @@ class PretrainModelInterface(nn.Module):
         self.smiles_model = SmilesModel(device)
         if self.pretrain_model_name == 'esm2_650m':
             self.pretrain_model = ESM2Model(device)
+        elif self.pretrain_model_name == 'esm2_35m':
+            self.pretrain_model = ESM2Model(device, model_path='esm2_35M')
+        elif self.pretrain_model_name == 'esm2_150m':
+            self.pretrain_model = ESM2Model(device, model_path='esm2_150m')
+        elif self.pretrain_model_name == 'esm2_3b':
+            self.pretrain_model = ESM2Model(device, model_path='esm2_3b')
+        elif self.pretrain_model_name == 'esm2_15b':
+            self.pretrain_model = ESM2Model(device, model_path='esm2_15b')
         elif self.pretrain_model_name == 'esm3_1.4b':
             self.pretrain_model = ESM3Model(device)
         elif self.pretrain_model_name == 'esmc_600m':
@@ -53,6 +61,8 @@ class PretrainModelInterface(nn.Module):
             self.pretrain_model = ProstT5Model(device)
         elif self.pretrain_model_name == 'protgpt2':
             self.pretrain_model = ProtGPT2Model(device)
+        elif self.pretrain_model_name == 'protrek_35m':
+            self.pretrain_model = ProTrekModel(device, model_path='protrek_35m')
         elif self.pretrain_model_name == 'protrek':
             self.pretrain_model = ProTrekModel(device)
         elif self.pretrain_model_name == 'saport':
@@ -170,7 +180,7 @@ class PretrainModelInterface(nn.Module):
             embedding = self.pretrain_model(batch, task_type=self.task_type, post_process=False)[:,1:-1,:]
             labels = torch.tensor(
                 np.stack(batch["label"])
-            ).to(embedding.device)
+            ).to(embedding.device).to(embedding.dtype)
             attention_mask = batch["attention_mask"][:,1:-1]
 
         batch_smi = None
