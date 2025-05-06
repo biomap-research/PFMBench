@@ -17,8 +17,20 @@ class UniModel(nn.Module):
         self.task_type = task_type
         self.finetune_type = finetune_type
         hid_dim = 480
+        if pretrain_model_name == 'esm2_35m':
+            self.input_dim = 320
+        
+        if pretrain_model_name == 'esm2_150m':
+            self.input_dim = 512
+            
         if pretrain_model_name == 'esm2_650m':
             self.input_dim = 1280
+        
+        if pretrain_model_name == 'esm2_3b':
+            self.input_dim = 2560
+        
+        if pretrain_model_name == 'esm2_15b':
+            self.input_dim = 5120
         
         if pretrain_model_name == 'esm3_1.4b':
             self.input_dim = 1536
@@ -34,7 +46,10 @@ class UniModel(nn.Module):
         
         if pretrain_model_name == 'protgpt2':
             self.input_dim = 1280
-        
+            
+        if pretrain_model_name == 'protrek_35m':
+            self.input_dim = 320
+            
         if pretrain_model_name == 'protrek':
             self.input_dim = 1920
         

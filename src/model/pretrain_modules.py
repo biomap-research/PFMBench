@@ -98,11 +98,11 @@ class UtilsModel:
         return padded_tensor
     
 class ESM2Model(BaseProteinModel, UtilsModel):
-    def __init__(self, device, max_length=1022, **kwargs):
+    def __init__(self, device, max_length=1022, model_path = 'esm2_650m',**kwargs):
         super().__init__(device)
         from transformers import AutoTokenizer, AutoModelForMaskedLM
-        self.model = AutoModelForMaskedLM.from_pretrained(f"{MODEL_ZOOM_PATH}/esm2_650m").to(self.device)
-        self.tokenizer = AutoTokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/esm2_650m")
+        self.model = AutoModelForMaskedLM.from_pretrained(f"{MODEL_ZOOM_PATH}/{model_path}").to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/{model_path}")
         self.max_length = max_length
 
     def get_tokenizer(self):
@@ -846,16 +846,26 @@ class ProtGPT2Model(BaseProteinModel, UtilsModel):
 
 # ProTrek
 class ProTrekModel(BaseProteinModel, UtilsModel):
-    def __init__(self, device, max_length=1022):
+    def __init__(self, device, max_length=1022, model_path='protrek_650m'):
         super().__init__(device)
-        config = {
-            "protein_config": f"{MODEL_ZOOM_PATH}/ProTrek/ProTrek_650M_UniRef50/esm2_t33_650M_UR50D",
-            "text_config": f"{MODEL_ZOOM_PATH}/ProTrek/ProTrek_650M_UniRef50/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
-            "structure_config": f"{MODEL_ZOOM_PATH}/ProTrek/ProTrek_650M_UniRef50/foldseek_t30_150M",
-            "load_protein_pretrained": False,
-            "load_text_pretrained": False,
-            "from_checkpoint": f"{MODEL_ZOOM_PATH}/ProTrek/ProTrek_650M_UniRef50/ProTrek_650M_UniRef50.pt"
-        }
+        if model_path == 'protrek_650m':
+            config = {
+                "protein_config": f"{MODEL_ZOOM_PATH}/ProTrek/ProTrek_650M_UniRef50/esm2_t33_650M_UR50D",
+                "text_config": f"{MODEL_ZOOM_PATH}/ProTrek/ProTrek_650M_UniRef50/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
+                "structure_config": f"{MODEL_ZOOM_PATH}/ProTrek/ProTrek_650M_UniRef50/foldseek_t30_150M",
+                "load_protein_pretrained": False,
+                "load_text_pretrained": False,
+                "from_checkpoint": f"{MODEL_ZOOM_PATH}/ProTrek/ProTrek_650M_UniRef50/ProTrek_650M_UniRef50.pt"
+            }
+        if model_path == 'protrek_35m':
+            config = {
+                "protein_config": f"{MODEL_ZOOM_PATH}/protrek_35M/esm2_t12_35M_UR50D",
+                "text_config": f"{MODEL_ZOOM_PATH}/protrek_35M/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext", 
+                "structure_config": f"{MODEL_ZOOM_PATH}/protrek_35M/foldseek_t12_35M", 
+                "load_protein_pretrained": False,
+                "load_text_pretrained": False,
+                "from_checkpoint": f"{MODEL_ZOOM_PATH}/protrek_35M/ProTrek_35M_UniRef50.pt"
+            }
         self.model = ProTrekTrimodalModel(**config).to(self.device)
         self.encoder_3di = mini3di.Encoder()
         self.max_length = max_length
