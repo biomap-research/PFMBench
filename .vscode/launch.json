@@ -12,7 +12,7 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {
-                "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark",
+                "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom",
                 "CUDA_VISIBLE_DEVICES": "0",
             },
         },
@@ -25,7 +25,7 @@
             "justMyCode": true,
             "args": [
                 "--config_name", "enzyme_commission_number",
-                "--pretrain_model_name", "esm3_1.4b",
+                "--pretrain_model_name", "procyon",
                 "--num_workers", "1",
             ],
             "env": {

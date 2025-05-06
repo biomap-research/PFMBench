@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
-from transformers import AutoTokenizer, AutoModelForMaskedLM
-# from peft import LoraConfig, TaskType, get_peft_model
-
+from src.model.pretrain_model_interface import PretrainModelInterface
 
 class UniModel(nn.Module):
     def __init__(
@@ -11,136 +9,96 @@ class UniModel(nn.Module):
         task_type: str,
         finetune_type: str,
         num_classes: int,
-        lora_r: int,
-        lora_alpha: int,
-        lora_dropout: float,
+        peft_type: str = "lora",
+        **kwargs
     ):
         super().__init__()
         self.pretrain_model_name = pretrain_model_name
         self.task_type = task_type
         self.finetune_type = finetune_type
         hid_dim = 480
+        if pretrain_model_name == 'esm2_650m':
+            self.input_dim = 1280
+        
+        if pretrain_model_name == 'esm3_1.4b':
+            self.input_dim = 1536
+        
+        if pretrain_model_name == 'esmc_600m':
+            self.input_dim = 1152
+        
+        if pretrain_model_name == 'progen2':
+            self.input_dim = 1536
+        
+        if pretrain_model_name == 'prostt5':
+            self.input_dim = 2048
+        
+        if pretrain_model_name == 'protgpt2':
+            self.input_dim = 1280
+        
+        if pretrain_model_name == 'protrek':
+            self.input_dim = 1920
+        
+        if pretrain_model_name == 'saport':
+            self.input_dim = 1280
+
+        if pretrain_model_name == 'procyon':
+            self.input_dim = 4096
+
+        if pretrain_model_name == 'prollama':
+            self.input_dim = 4096
+        
+        if pretrain_model_name == 'prost':
+            self.input_dim = 512
+        
+        if pretrain_model_name == 'gearnet':
+            self.input_dim = 3072
+        
+        if pretrain_model_name == 'venusplm':
+            self.input_dim = 1024
+
+        if pretrain_model_name == 'prosst2048':
+            self.input_dim = 768
+
+        if pretrain_model_name == 'prott5':
+            self.input_dim = 1024
+        
+        if pretrain_model_name == 'dplm':
+            self.input_dim = 1280
+        
+        if pretrain_model_name == 'ontoprotein':
+            self.input_dim = 1024
+
+        if pretrain_model_name == 'ankh_base':
+            self.input_dim = 768
+            
+        if pretrain_model_name == 'pglm':
+            self.input_dim = 2048
+            
+
+        self.smiles_proj = nn.Sequential(
+            nn.Linear(2048, hid_dim),
+            nn.GELU()
+        )
+        self.proj = nn.Sequential(
+            nn.Linear(self.input_dim, hid_dim),
+            nn.LayerNorm(hid_dim)
+        )
         if finetune_type == 'adapter':
-            if pretrain_model_name == 'esm2_650m':
-                self.input_dim = 1280
-            
-            if pretrain_model_name == 'esm3_1.4b':
-                self.input_dim = 1536
-            
-            if pretrain_model_name == 'esmc_600m':
-                self.input_dim = 1152
-            
-            if pretrain_model_name == 'progen2':
-                self.input_dim = 1536
-            
-            if pretrain_model_name == 'prostt5':
-                self.input_dim = 2048
-            
-            if pretrain_model_name == 'protgpt2':
-                self.input_dim = 1280
-            
-            if pretrain_model_name == 'protrek':
-                self.input_dim = 1920
-            
-            if pretrain_model_name == 'saport':
-                self.input_dim = 1280
-
-            if pretrain_model_name == 'procyon':
-                self.input_dim = 4096
-
-            if pretrain_model_name == 'prollama':
-                self.input_dim = 4096
-            
-            if pretrain_model_name == 'prost':
-                self.input_dim = 512
-            
-            if pretrain_model_name == 'gearnet':
-                self.input_dim = 3072
-            
-            if pretrain_model_name == 'venusplm':
-                self.input_dim = 1024
-
-            if pretrain_model_name == 'prosst2048':
-                self.input_dim = 768
-
-            if pretrain_model_name == 'prott5':
-                self.input_dim = 1024
-            
-            if pretrain_model_name == 'dplm':
-                self.input_dim = 1280
-            
-            if pretrain_model_name == 'ontoprotein':
-                self.input_dim = 1024
-
-            if pretrain_model_name == 'ankh_base':
-                self.input_dim = 768
-                
-            if pretrain_model_name == 'pglm':
-                self.input_dim = 2048
-                
-
-            self.smiles_proj = nn.Sequential(nn.Linear(2048, hid_dim),
-                                      nn.GELU()
-            )
-            self.proj = nn.Sequential(nn.Linear(self.input_dim, hid_dim),
-                                      nn.LayerNorm(hid_dim))
-            
             self.adapter = TransformerAdapter(
                     input_dim=hid_dim,               # 输入维度
                     hidden_dim=hid_dim,          # 隐藏层维度
                     num_layers=6,                # Transformer 层数
                     num_heads=20,                 # 多头注意力头数
                 )
-        
-        if pretrain_model_name == 'prollama':
-            from transformers import LlamaForCausalLM, LlamaTokenizer
-            llama_path = "/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark_project/data/ProLLaMA"
-            pretrain_model = LlamaForCausalLM.from_pretrained(
-                llama_path,
-                torch_dtype=torch.bfloat16,
-                # low_cpu_mem_usage=True,
-                # device_map='auto',
-                quantization_config=None
+        elif finetune_type == 'peft': 
+            self.pretrain_model_interface = PretrainModelInterface(
+                pretrain_model_name
             )
-            if finetune_type == 'lora':
-                lora_config = LoraConfig(
-                                        inference_mode=False,        # 训练模式
-                                        r=lora_r,                         # 低秩矩阵的秩
-                                        lora_alpha=lora_alpha,               # LoRA 的 alpha 参数
-                                        lora_dropout=lora_dropout,            # Dropout 防止过拟合
-                                        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],  # 仅调整 Attention 的 query 和 value
-                                        )
-                self.pretrain_model = get_peft_model(pretrain_model, lora_config)
-                self.proj = nn.Linear(4096, hid_dim)
-
-        # if pretrain_model_name == 'esm2_650m':
-        #     self.tokenizer = AutoTokenizer.from_pretrained("model_zoom/esm2_650m")
-        #     pretrain_model = AutoModelForMaskedLM.from_pretrained("model_zoom/esm2_650m")
-        #     if finetune_type == 'lora':
-        #         lora_config = LoraConfig(
-        #                                 inference_mode=False,        # 训练模式
-        #                                 r=lora_r,                         # 低秩矩阵的秩
-        #                                 lora_alpha=lora_alpha,               # LoRA 的 alpha 参数
-        #                                 lora_dropout=lora_dropout,            # Dropout 防止过拟合
-        #                                 target_modules=["query", "value"],  # 仅调整 Attention 的 query 和 value
-        #                                 )
-        #         self.pretrain_model = get_peft_model(pretrain_model, lora_config)
-        #         self.proj = nn.Linear(1280, hid_dim)
-            
-        #     if finetune_type == 'adapter':
-        #         for param in pretrain_model.parameters():
-        #             param.requires_grad = False
-        #         self.pretrain_model = pretrain_model
-        #         self.proj = nn.Linear(1280, hid_dim)
-        #         self.adapter = TransformerAdapter(
-        #             input_dim=hid_dim,               # 输入维度
-        #             hidden_dim=hid_dim,          # 隐藏层维度
-        #             num_layers=6,                # Transformer 层数
-        #             num_heads=20,                 # 多头注意力头数
-        #         )
-                
-            
-            
+            self.pretrain_model_interface.setup_peft(
+                peft_type=peft_type,
+                **kwargs
+            )
+            self.pretrain_model = self.pretrain_model_interface.pretrain_model.model
         
         if task_type in ['classification', 'residual_classification']:
             self.task_head = nn.Linear(hid_dim, num_classes)
@@ -173,77 +131,43 @@ class UniModel(nn.Module):
             attention_mask = batch['attention_mask']
             embeddings = batch['embedding']
             proj_output = self.proj(embeddings)
+            proj_output = self.adapter(proj_output, mask=attention_mask)
             if batch['smiles'] is not None:
                 smiles =  batch['smiles']
                 smiles_proj_output = self.smiles_proj(smiles).unsqueeze(1)
                 smiles_attention_mask = torch.ones(attention_mask.shape[0], 1, device=attention_mask.device).bool()
                 proj_output = torch.cat((smiles_proj_output, proj_output), dim=1).contiguous()
                 attention_mask = torch.cat((smiles_attention_mask, attention_mask), dim=-1).contiguous()
-            proj_output = self.adapter(proj_output, mask=attention_mask)
-            
-            if self.task_type == 'contact': # resideu-level
-                logits = self.task_head(proj_output)
-                loss = self.loss(logits, labels, batch['attention_mask'])
-                return {'loss': loss, 'logits': logits}
-            elif self.task_type == 'residual_classification': # resideu-level
-                logits = self.task_head(proj_output)
-                logits = logits[attention_mask]
-                labels = labels[attention_mask]
-                loss = self.loss(logits, labels)
-                return {'loss': loss, 'logits': logits}
-            else: # sequence-level
-                pooled_output = torch.mean(proj_output, dim=1)
-                logits = self.task_head(pooled_output)
-                if isinstance(self.loss, nn.BCEWithLogitsLoss):
-                    labels = labels.float()
-                    if labels.ndim == 1:
-                        labels = labels.unsqueeze(1)
-                loss = self.loss(logits, labels)
-                return {'loss': loss, 'logits': logits}
 
-        
-        # seqs = batch['seq']
-        # attention_mask = batch['mask']==0
-        # labels = batch['label']
-        # if self.pretrain_model_name == 'esm2_650m':
-        #     if self.finetune_type == 'lora':
-        #         outputs = self.pretrain_model.esm(
-        #             seqs,
-        #             attention_mask=attention_mask,
-        #             return_dict=True,
-        #         )
-        #         hidden_states = outputs.last_hidden_state
-        #         proj_output = self.proj(hidden_states)
-        
-        # if self.pretrain_model_name == 'prollama':                
-        #     if self.finetune_type == 'lora':
-        #         outputs = self.pretrain_model(
-        #             input_ids = seqs,
-        #             attention_mask=attention_mask,
-        #             output_hidden_states=True
-        #         )
-        #         hidden_states = outputs.hidden_states[-1]
-        #         proj_output = self.proj(hidden_states)
-                
-        # #     if self.finetune_type == 'adapter':
-        # #         with torch.no_grad():
-        # #             outputs = self.pretrain_model.esm(
-        # #                 seqs,
-        # #                 attention_mask=attention_mask,
-        # #                 return_dict=True,
-        # #             )
-        # #         hidden_states = outputs.last_hidden_state
-        # #         proj_output = self.proj(hidden_states)
-        # #         # 通过 Transformer Adapter 处理
-        # #         proj_output = self.adapter(proj_output, mask=attention_mask)
+        elif self.finetune_type == "peft":
+            out = self.pretrain_model_interface(batch)
+            embeddings, labels, attention_mask, smiles = out
+            proj_output = self.proj(embeddings.to(self.proj[0].weight.dtype))
+            if smiles is not None:
+                smiles_proj_output = self.smiles_proj(smiles).unsqueeze(1)
+                smiles_attention_mask = torch.ones(attention_mask.shape[0], 1, device=attention_mask.device).bool()
+                proj_output = torch.cat((smiles_proj_output, proj_output), dim=1).contiguous()
+                attention_mask = torch.cat((smiles_attention_mask, attention_mask), dim=-1).contiguous()
             
-            
-        
-        #     if labels is not None:
-        #         loss = self.loss(logits, labels)
-        #         return {'loss': loss, 'logits': logits}
-        #     else:
-        #         return {'logits': logits}
+        if self.task_type == 'contact': # resideu-level
+            logits = self.task_head(proj_output)
+            loss = self.loss(logits, labels, attention_mask)
+            return {'loss': loss, 'logits': logits, 'label': labels, 'attention_mask': attention_mask}
+        elif self.task_type == 'residual_classification': # resideu-level
+            logits = self.task_head(proj_output)
+            logits = logits[attention_mask]
+            labels = labels[attention_mask]
+            loss = self.loss(logits, labels)
+            return {'loss': loss, 'logits': logits, 'label': labels, 'attention_mask': attention_mask}
+        else: # sequence-level
+            pooled_output = torch.mean(proj_output, dim=1)
+            logits = self.task_head(pooled_output)
+            if isinstance(self.loss, nn.BCEWithLogitsLoss):
+                labels = labels.float()
+                if labels.ndim == 1:
+                    labels = labels.unsqueeze(1)
+            loss = self.loss(logits, labels)
+            return {'loss': loss, 'logits': logits, 'label': labels, 'attention_mask': attention_mask}
         
 # Transformer Adapter 模块
 class TransformerAdapter(nn.Module):

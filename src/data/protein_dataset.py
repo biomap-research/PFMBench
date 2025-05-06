@@ -30,9 +30,11 @@ def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles
             # 解析 pdb 文件，unique_id 作为结构的 id
             if "|" not in pdb_path:
                 structure = ESMProtein.from_pdb(pdb_path)
+                # TODO
                 return {
                     'name':name, 
-                    'seq': structure.sequence, 
+                    'seq': structure.sequence, # aaseq
+                    # 'seq': aa_seq, # aaseq
                     'X': structure.coordinates, 
                     'label': label, 
                     'unique_id': unique_id, 
@@ -42,13 +44,14 @@ def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles
             # X, C, S = structure.to_XCS(all_atom=True)
             # X, C, S = X[0], C[0], S[0]
             else: # PPI
-                structures = []
+                structures, sequences = [], []
                 for _pdb_path in pdb_path.split("|"):
                     structure = ESMProtein.from_pdb(_pdb_path)
                     structures.append(structure.coordinates)
+                    sequences.append(structure.sequence)
                 return {
                     'name':name, 
-                    'seq': aa_seq, 
+                    'seq': "|".join(sequences), 
                     'X': structures, # coords is organized as a list here
                     'label': label, 
                     'unique_id': unique_id, 
@@ -88,7 +91,7 @@ class ProteinDataset(Dataset):
         for i in range(len(csv_data)):
             path_list.append((csv_data.iloc[i].get('aa_seq'), csv_data.iloc[i].get('pdb_path'), csv_data.iloc[i]['label'], csv_data.iloc[i].get('unique_id'), task_type, num_classes, csv_data.iloc[i].get('smiles'))) #列表里面必须是元组，不然debug模式下并行加载数据会报错
         
-        # path_list = path_list[:10] # this is for fast debug, please comment it in production
+        # path_list = path_list[:100] # this is for fast debug, please comment it in production
         self.data = pmap_multi(read_data, path_list, n_jobs=-1)
         self.data = [d for d in self.data if d is not None]
         self.max_length = min(self.max_length, max([len(d['seq']) for d in self.data])+2)
@@ -117,7 +120,6 @@ class ProteinDataset(Dataset):
             embedding = self.pad_data(self.data[idx]['embedding'], dim=0, pad_value=0, max_length=max_length_batch)
             attention_mask = self.pad_data(self.data[idx]['attention_mask'], dim=0, pad_value=0, max_length=max_length_batch)
             label = self.data[idx]['label']
-            
 
             if self.task_type == 'binary_classification':
                 label = label[None].float()
@@ -140,27 +142,7 @@ class ProteinDataset(Dataset):
                 
             return result
         else:
-            seq = self.data[idx]['seq']
-            label = self.data[idx]['label']
-            X = self.data[idx]['X']
-            # X = dynamic_pad(X, [1, 1], dim=0, pad_value=0) ## todo, 这里需要根据实际情况进行修改, 如果sequence tokenizer对数据加上了EOS, BOS，则需要这一行
-            X = self.pad_data(X, dim=0)
-            # if self.pretrain_model_name == 'prollama':
-            mask = torch.ones(self.max_length)
-            seq_token = torch.tensor(self.tokenizer.encode(seq))
-            mask[:len(seq_token)] = 0
-            seq_token = self.pad_data(seq_token, dim=0)
-            smiles = self.data[idx].get('smiles')
-            sample = {
-                'seq': seq_token,
-                'label': torch.tensor(label),
-                'mask': mask,
-                'coords': X,
-                'smiles': smiles
-            }
-
-            return sample
-
+            return self.data[idx]
 
 
 def dynamic_pad(tensor, pad_size, dim=0, pad_value=0):

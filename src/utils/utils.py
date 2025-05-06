@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from joblib import Parallel, delayed, parallel_backend
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
@@ -23,13 +24,11 @@ def pmap_multi(pickleable_fn, data, n_jobs=None, verbose=1, desc=None, **kwargs)
     # tqdm 外部包裹，不要嵌入 generator 里
     data_iter = list(tqdm(data, desc=desc))
 
-    results = Parallel(n_jobs=n_jobs, verbose=verbose, timeout=None)(
-        delayed(_wrapped)(d) for d in data_iter
-    )
+    with parallel_backend('loky'):  # 或 'multiprocessing'
+        results = Parallel(n_jobs=n_jobs, verbose=verbose, timeout=None)(
+            delayed(_wrapped)(d) for d in data_iter
+        )
     return results
-
-    
-
 
 
 def modulo_with_wrapped_range(

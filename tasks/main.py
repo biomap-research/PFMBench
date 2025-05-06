@@ -47,7 +47,8 @@ def create_parser():
     
     # Model parameters
     parser.add_argument('--sequence_only', default=0, type=int)
-    parser.add_argument('--finetune_type', default='adapter', type=str)
+    parser.add_argument('--finetune_type', default='adapter', type=str, choices=['adapter', 'peft'])
+    parser.add_argument('--peft_type', default='adalora', type=str, choices=['lora', 'adalora', 'ia3', 'prefix_tuning', 'freeze'])
     parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm', 'prott5', 'dplm', 'ontoprotein', 'ankh_base', 'pglm'])
     parser.add_argument("--config_name", type=str, default='fitness_prediction', help="Name of the Hydra config to use")
    

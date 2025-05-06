@@ -52,25 +52,4 @@ class DInterface(DInterface_base):
                     'smiles': torch.stack(smiles, dim=0) if len(smiles) > 0 else None,
                     }
         else:
-            seq_list = []
-            coords_list = []
-            label_list = []
-            mask_list = []
-            for data in data_list:
-                seq_list.append(data['seq'])
-                coords_list.append(data['coords'])
-                label_list.append(data['label'])
-                mask_list.append(data['mask'])
-            
-            seq = torch.stack(seq_list, dim=0)
-            coords = torch.stack(coords_list, dim=0)
-            label = torch.stack(label_list, dim=0)
-            mask = torch.stack(mask_list, dim=0)
-            
-            
-            return {
-                'seq': seq,
-                'coords': coords,
-                'label': label,
-                'mask': mask
-            }
+            return data_list

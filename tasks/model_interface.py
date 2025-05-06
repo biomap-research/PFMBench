@@ -49,8 +49,8 @@ class MInterface(MInterface_base):
             self._context["validation"]["metric"].append(
                 self.metrics(
                 ret['logits'][...,0].float().cpu(),
-                batch['label'].float().cpu(),
-                batch['attention_mask'].float().cpu(),
+                ret['label'].float().cpu(),
+                ret['attention_mask'].float().cpu(),
                 name="valid"
             ))
         elif self.hparams.task_type in [
@@ -59,13 +59,13 @@ class MInterface(MInterface_base):
             self._context["validation"]["metric"].append(
                 self.metrics(
                 ret['logits'].float().cpu().numpy(),
-                batch['label'].float().cpu().numpy(),
-                batch['attention_mask'].float().cpu().numpy(),
+                ret['label'].float().cpu().numpy(),
+                ret['attention_mask'].float().cpu().numpy(),
                 name="valid"
             ))
         else:
             self._context["validation"]["logits"].append(ret['logits'].float().cpu().numpy())
-            self._context["validation"]["labels"].append(batch['label'].float().cpu().numpy())
+            self._context["validation"]["labels"].append(ret['label'].float().cpu().numpy())
             
         self.log_dict(log_dict)
         return self.log_dict
@@ -103,8 +103,8 @@ class MInterface(MInterface_base):
         if self.hparams.task_type in ["contact"]:
             self._context["test"]["metric"].append(self.metrics(
                 ret['logits'][...,0].float().cpu(),
-                batch['label'].float().cpu(),
-                batch['attention_mask'].float().cpu(),
+                ret['label'].float().cpu(),
+                ret['attention_mask'].float().cpu(),
                 name="test"
             ))
         elif self.hparams.task_type in [
@@ -113,13 +113,13 @@ class MInterface(MInterface_base):
             self._context["test"]["metric"].append(
                 self.metrics(
                 ret['logits'].float().cpu().numpy(),
-                batch['label'].float().cpu().numpy(),
-                batch['attention_mask'].float().cpu().numpy(),
+                ret['label'].float().cpu().numpy(),
+                ret['attention_mask'].float().cpu().numpy(),
                 name="test"
             ))
         else:
             self._context["test"]["logits"].append(ret['logits'].float().cpu().numpy())
-            self._context["test"]["labels"].append(batch['label'].float().cpu().numpy())
+            self._context["test"]["labels"].append(ret['label'].float().cpu().numpy())
         return self.log_dict
 
     def on_test_epoch_end(self):
@@ -150,7 +150,16 @@ class MInterface(MInterface_base):
         return self.log_dict
 
     def load_model(self):
-        self.model = UniModel(self.hparams.pretrain_model_name, self.hparams.task_type, self.hparams.finetune_type, self.hparams.num_classes, self.hparams.lora_r, self.hparams.lora_alpha, self.hparams.lora_dropout)
+        self.model = UniModel(
+                self.hparams.pretrain_model_name, 
+                self.hparams.task_type, 
+                self.hparams.finetune_type, 
+                self.hparams.num_classes, 
+                peft_type = self.hparams.peft_type,
+                lora_r = self.hparams.lora_r, 
+                lora_alpha = self.hparams.lora_alpha, 
+                lora_dropout = self.hparams.lora_dropout
+            )
     
     def metrics(self, preds, target, attn_mask=None, name='default'):
         if self.hparams.task_type == "classification":

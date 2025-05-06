@@ -2,6 +2,7 @@ import sys; sys.path.append('/nfs_beijing/kubeflow-user/zhangyang_2024/workspace
 import torch
 import torch.nn as nn
 import os
+import numpy as np
 from tqdm import tqdm
 from src.model.pretrain_modules import (
     ESM2Model, SmilesModel, ESM3Model, ESMC600MModel, ProCyonModel, 
@@ -11,7 +12,6 @@ from src.model.pretrain_modules import (
 )
 MODEL_ZOOM_PATH = '/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom'
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
-
 
 
 class PretrainModelInterface(nn.Module):
@@ -75,7 +75,15 @@ class PretrainModelInterface(nn.Module):
             self.pretrain_model = ANKHBase(device)
         elif self.pretrain_model_name == "pglm":
             self.pretrain_model = PGLMModel(device)
-        
+    
+    def setup_peft(self, peft_type="lora", **kwargs):
+        if self.pretrain_model is None:
+            raise RuntimeError("pretrained model is not initialized, please initial it first.")
+        self.pretrain_model.setup_peft(
+            peft_type=peft_type,
+            **kwargs
+        )
+
     @torch.no_grad()
     def inference_datasets(self, data, task_name=None):
         self.pretrain_model.eval()
@@ -125,4 +133,49 @@ class PretrainModelInterface(nn.Module):
             proccessed_data.extend(results)
             
         return proccessed_data
-            
+    
+    def forward(self, data):
+        if "|" in data[0]['seq']: # PPI case
+            samples_A, samples_B = [], []
+            for sample in data:
+                sample_A = {key: value for key, value in sample.items() if key != 'seq'}
+                sample_B = {key: value for key, value in sample.items() if key != 'seq'}
+                sample_A['seq'] = sample['seq'].split('|')[0]
+                sample_B['seq'] = sample['seq'].split('|')[1]
+                if 'pdb_path' in sample:
+                    sample_A['pdb_path'] = sample['pdb_path'].split('|')[0]
+                    sample_B['pdb_path'] = sample['pdb_path'].split('|')[1]
+                    sample_A['X'] = sample['X'][0]
+                    sample_B['X'] = sample['X'][1]
+                samples_A.append(sample_A)
+                samples_B.append(sample_B)
+
+            batch_A = self.pretrain_model.construct_batch(samples_A)
+            batch_B = self.pretrain_model.construct_batch(samples_B)
+            embedding_A = self.pretrain_model(batch_A, task_type=self.task_type, post_process=False)[:,1:-1,:]
+            embedding_B = self.pretrain_model(batch_B, task_type=self.task_type, post_process=False)[:,1:-1,:]
+            bs, hidden_dim = embedding_A.shape[0], embedding_A.shape[-1]
+            PAD = torch.ones((bs, 1, hidden_dim), device=embedding_A.device)
+            embedding = torch.cat([embedding_A, PAD, embedding_B], dim=1).contiguous()
+            labels = torch.tensor(
+                np.stack(batch_A["label"])
+            ).to(embedding.device)
+            PAD_MASK = torch.ones((bs, 1), device=embedding_A.device)
+            attention_mask = torch.cat(
+                [batch_A['attention_mask'][:,1:-1], PAD_MASK, batch_B['attention_mask'][:,1:-1]], dim=1
+            )==1
+        else: # sinlge protein case
+            batch = self.pretrain_model.construct_batch(data)
+            # TODO: WE DEBUG HERE 
+            embedding = self.pretrain_model(batch, task_type=self.task_type, post_process=False)[:,1:-1,:]
+            labels = torch.tensor(
+                np.stack(batch["label"])
+            ).to(embedding.device)
+            attention_mask = batch["attention_mask"][:,1:-1]
+
+        batch_smi = None
+        if data[0].get('smiles') is not None:
+            batch_smi = self.smiles_model.construct_batch(data)
+            batch_smi = torch.stack(batch_smi).contiguous()
+
+        return embedding, labels, attention_mask, batch_smi

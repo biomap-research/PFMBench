@@ -19,6 +19,12 @@ wandb agent biomap_ai/protein_benchmark/n0r2hjd8
 
 
 ## ============== sweep EC&CONTACTMAP ESM-2 ==============
-CUDA_VISIBLE_DEVICES=0 wandb agent biomap_ai/protein_benchmark/ratgdefv &
-CUDA_VISIBLE_DEVICES=1 wandb agent biomap_ai/protein_benchmark/ratgdefv &
+CUDA_VISIBLE_DEVICES=0 wandb agent biomap_ai/protein_benchmark/vpzg822x &
+CUDA_VISIBLE_DEVICES=1 wandb agent biomap_ai/protein_benchmark/vpzg822x &
+CUDA_VISIBLE_DEVICES=2 wandb agent biomap_ai/protein_benchmark/vpzg822x &
+CUDA_VISIBLE_DEVICES=3 wandb agent biomap_ai/protein_benchmark/vpzg822x &
+CUDA_VISIBLE_DEVICES=4 wandb agent biomap_ai/protein_benchmark/vpzg822x &
+CUDA_VISIBLE_DEVICES=5 wandb agent biomap_ai/protein_benchmark/vpzg822x &
+CUDA_VISIBLE_DEVICES=6 wandb agent biomap_ai/protein_benchmark/vpzg822x &
+CUDA_VISIBLE_DEVICES=7 wandb agent biomap_ai/protein_benchmark/vpzg822x &
 wandb agent biomap_ai/protein_benchmark/io3xdph3
