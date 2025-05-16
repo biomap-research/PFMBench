@@ -105,9 +105,7 @@ env CUDA_VISIBLE_DEVICES=0 \
 ---
 
 ## 🖼️ Architecture Diagram
-```markdown
-![PFMBench Framework](fig/framework.png)
-```
+![PFMBench Framework](./fig/framework.png)
 
 ---
 
