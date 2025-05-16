@@ -29,6 +29,8 @@ Task:
   task_name: "go_molecular_function"
   task_type: "multi_labels_classification"
   num_classes: 489
+  # metric: "valid_f1_max"
+  # direction: "max"
 
 hydra:
   output_subdir: null

@@ -29,6 +29,8 @@ Task:
   task_name: "go_cellular_component"
   task_type: "multi_labels_classification"
   num_classes: 320
+  # metric: "valid_f1_max"
+  # direction: "max"
 
 hydra:
   output_subdir: null

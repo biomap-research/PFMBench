@@ -9,7 +9,7 @@ from src.data.esm.sdk.api import ESMProtein
 from sklearn.preprocessing import MultiLabelBinarizer
 
 
-def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles):
+def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles, csv_name=""):
     try:
         if unique_id is None:
             unique_id = str(hash(aa_seq))
@@ -17,13 +17,13 @@ def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles
         if task_type == "multi_labels_classification":
             mlb = MultiLabelBinarizer(classes=range(int(num_classes)))
             label = str(label)
-            label = mlb.fit_transform([[int(ele) for ele in label.split(",")]]).flatten().tolist()
-        
-        if task_type == "contact":
+            label = torch.tensor(mlb.fit_transform([[int(ele) for ele in label.split(",")]]).flatten().tolist())
+        elif task_type == "contact":
             label = torch.load(label, weights_only=True) # diable warning
-        
-        if task_type == "residual_classification":
+        elif task_type == "residual_classification":
             label = torch.tensor(list(map(int, label.strip('[]').replace('\n', ' ').split())))
+        else:
+            label = torch.tensor(label)
             
         name = str(hash(pdb_path))
         if pdb_path is not None:
@@ -34,7 +34,7 @@ def read_data(aa_seq, pdb_path, label, unique_id, task_type, num_classes, smiles
                 return {
                     'name':name, 
                     # 'seq': structure.sequence, # aaseq
-                    'seq': aa_seq, # aaseq
+                    'seq': aa_seq if "flip" in csv_name.lower() else structure.sequence, # aaseq
                     'X': structure.coordinates, 
                     'label': label, 
                     'unique_id': unique_id, 
@@ -89,9 +89,9 @@ class ProteinDataset(Dataset):
 
         path_list = []
         for i in range(len(csv_data)):
-            path_list.append((csv_data.iloc[i].get('aa_seq'), csv_data.iloc[i].get('pdb_path'), csv_data.iloc[i]['label'], csv_data.iloc[i].get('unique_id'), task_type, num_classes, csv_data.iloc[i].get('smiles'))) #列表里面必须是元组，不然debug模式下并行加载数据会报错
+            path_list.append((csv_data.iloc[i].get('aa_seq'), csv_data.iloc[i].get('pdb_path'), csv_data.iloc[i]['label'], csv_data.iloc[i].get('unique_id'), task_type, num_classes, csv_data.iloc[i].get('smiles'), csv_file)) #列表里面必须是元组，不然debug模式下并行加载数据会报错
         
-        # path_list = path_list[:100] # this is for fast debug, please comment it in production
+        # path_list = path_list[:10] # this is for fast debug, please comment it in production
         self.data = pmap_multi(read_data, path_list, n_jobs=-1)
         self.data = [d for d in self.data if d is not None]
         self.max_length = min(self.max_length, max([len(d['seq']) for d in self.data])+2)
@@ -142,7 +142,25 @@ class ProteinDataset(Dataset):
                 
             return result
         else:
-            return self.data[idx]
+            max_length_batch = self.max_length
+            label = self.data[idx]['label']
+            if self.task_type == 'binary_classification':
+                label = label[None].float()
+            if self.task_type == 'contact':
+                label = (label == 0).int()
+                label = F.pad(label, [0, max_length_batch-label.shape[0], 0, max_length_batch-label.shape[0]])
+            if self.task_type == 'residual_classification': 
+                label = F.pad(label, [0, max_length_batch-label.shape[0]])
+            data = {
+                    'name': self.data[idx]["name"], 
+                    'seq': self.data[idx]["seq"], 
+                    'X': self.data[idx]["X"],
+                    'label': label, 
+                    'unique_id': self.data[idx]["unique_id"],
+                    'pdb_path': self.data[idx]["pdb_path"],
+                    'smiles': self.data[idx]["smiles"],
+            }
+            return data
 
 
 def dynamic_pad(tensor, pad_size, dim=0, pad_value=0):

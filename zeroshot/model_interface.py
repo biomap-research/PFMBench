@@ -20,49 +20,33 @@ class MInterface(MInterface_base):
     def __init__(self, model_name=None, loss=None, lr=None, **kargs):
         super().__init__()
         self.save_hyperparameters()
-        self.model = PretrainModelInterface(self.hparams.pretrain_model_name, task_type=self.hparams.task_type)
+        self.model = PretrainModelInterface(
+            self.hparams.pretrain_model_name, 
+            task_type=self.hparams.task_type
+        )
         self.tokenizer = self.model.pretrain_model.get_tokenizer()
-        self.similarity_models = [
-            ProSTModel, ProstT5Model, ProtT5, ANKHBase, ProtGPT2Model
+        self.multimodal_models = [
+            ProTrekModel, 
+            SaPortModel
         ]
-        self.wildtype_marginal_models = [
-            VenusPLMModel, ProTrekModel, SaPortModel, DPLMModel
+        self.mlm_models = [
+            ESM2Model,
+            ESMC600MModel,
+            ESM3Model,
+            PGLMModel,
+            VenusPLMModel,
+            ProTrekModel,
+            DPLMModel,
         ]
-        self.mlm_marginal_models = [
-            ESM2Model, ESMC600MModel, ESM3Model, PGLMModel
-        ]
+        self.start, self.end = 1, -1
+        if type(self.model) == ProtGPT2Model:
+            self.start -= 1
         self._context = {
             "test": {
                 "spearmans": []
             },
         }
         os.makedirs(os.path.join(self.hparams.res_dir, self.hparams.ex_name), exist_ok=True)
-    
-    def forward(self, batch):
-        dms_id = batch["dms_id"][0]
-        dms_csv_path = batch["dms_csv_path"][0]
-        pdb_range = batch["pdb_range"][0]
-        
-        target_sequence = batch["target_sequence"][0]
-        pdb_file_path = batch["pdb_file_path"][0]
-        max_length = batch["max_length"][0]
-        self.model.pretrain_model.max_length = max_length
-        structure = ESMProtein.from_pdb(pdb_file_path)
-        coordinates = structure.coordinates
-        ori_input = [ # get wildtype logits
-            {
-                "seq": target_sequence,
-                "X": coordinates,
-                "name": "wildtype",
-                "label": 1.0
-            }
-        ]
-        # get wt log probability
-        ori_batch = self.model.pretrain_model.construct_batch(ori_input)
-        with torch.no_grad():
-            logits = self.model.pretrain_model.forward(batch=ori_batch, return_logits=True)[:, 1:-1, :].squeeze(0).contiguous()
-        # log_probs = torch.nn.functional.log_softmax(logits, dim=-1)[0]
-        return logits
 
     def test_step(self, batch, batch_idx):
         dms_id = batch["dms_id"][0]
@@ -70,91 +54,57 @@ class MInterface(MInterface_base):
         pdb_range = batch["pdb_range"]
         target_sequence = batch["target_sequence"][0]
         pdb_file_path = batch["pdb_file_path"][0]
-
-        # preprocess
         dms_df = pd.read_csv(dms_csv_path)
         true_dms_scores = dms_df["DMS_score"].tolist()
-
-        # logits = self(batch)
-
         predict_dms = []
 
-        if type(self.model.pretrain_model) in self.wildtype_marginal_models:
-            if type(self.model.pretrain_model) in [ProTrekModel, SaPortModel]:
-                batch["target_sequence"] = [batch["target_sequence"][0][pdb_range[0]:pdb_range[1]]]
-            logits = self(batch)
-            mutants = dms_df["mutant"].tolist() # only use mutant here
-            probs = torch.nn.functional.log_softmax(logits, dim=-1)
-            # some special process for SaProt
-            if isinstance(self.model.pretrain_model, SaPortModel):
-                coordinates = ESMProtein.from_pdb(pdb_file_path).coordinates
-                N, CA, C, CB = coordinates[:,0], coordinates[:,1], coordinates[:,2], coordinates[:,3]
-                states = self.model.pretrain_model.encoder_3di.encode_atoms(ca=CA.numpy(), cb=CB.numpy(), n=N.numpy(), c=C.numpy())
-                struct_seq = self.model.pretrain_model.encoder_3di.build_sequence(states).lower()
-            else:
-                struct_seq = None
-            for mutant, true_dms_score in tqdm(zip(mutants, true_dms_scores), total=len(mutants), desc=f"Processing {dms_id}..."):
-                score = 0.0
-                for mut in mutant.split(":"):
-                    wt_res, pos, mut_res = mut[0], int(mut[1:-1])-(1+pdb_range[0]), mut[-1]
-                    if struct_seq is not None:
-                        wt_res = f"{wt_res}{struct_seq[pos]}"
-                        mut_res = f"{mut_res}{struct_seq[pos]}"
-                    wt_token_id = self.tokenizer.convert_tokens_to_ids(wt_res)
-                    mut_token_id = self.tokenizer.convert_tokens_to_ids(mut_res)
-                    ll_wt = probs[pos, wt_token_id].item()
-                    ll_mut = probs[pos, mut_token_id].item()
-                    score += (ll_mut - ll_wt)
-                predict_dms.append(score)
+        if type(self.model) in self.multimodal_models:
+            # truncated by pdb
+            target_sequence = target_sequence[pdb_range[0]:pdb_range[1]]
+            offset = pdb_range[0].item() if isinstance(pdb_range[0], torch.Tensor) else pdb_range[0]
+        else:
+            offset = 0
 
-        elif type(self.model.pretrain_model) in self.mlm_marginal_models:
+        if pdb_file_path is not None:
+            structure = ESMProtein.from_pdb(pdb_file_path)
+            coordinates = structure.coordinates
+        else:
+            coordinates = None
+
+        if type(self.model.pretrain_model) in self.mlm_models:
             sequence = target_sequence
             mutations = dms_df["mutant"].tolist()
             model = self.model.pretrain_model
             tokenizer = self.tokenizer
             batch_size = 8
-            window_size = 1024
-            device = model.device
-            verbose = True
+            window_size = 1022
 
             if len(sequence) == 0:
-                raise ValueError("Empty sequence provided")
+                raise ValueError("Empty wildtype sequence provided")
+            print(f"Working with sequence of length {len(sequence)} using optimized MLM approach")
 
-            if verbose:
-                print(f"Working with sequence of length {len(sequence)} using optimized MLM approach")
-
-            parsed_mutations = []
-            unique_positions = set()
-
+            parsed_mutations, unique_positions = [], set()
             for mutation in mutations:
                 if ":" in mutation:
                     sub_mutations = mutation.split(":")
                     multi_wt, multi_mt = "", ""
-                    multi_pos = []
-                    multi_seq_pos = []
-                    valid_multi = True
-
+                    multi_pos, multi_seq_pos, valid_multi = [], [], True
                     for sub_mut in sub_mutations:
                         match = re.match(r"([A-Z])(\d+)([A-Z])", sub_mut)
                         if not match:
-                            if verbose:
-                                print(f"Warning: Could not parse mutation {sub_mut}, skipping")
+                            print(f"Warning: Could not parse mutation {sub_mut}, skipping")
                             valid_multi = False
                             break
-
                         wt, pos_str, mt = match.groups()
                         pos = int(pos_str)
-                        seq_pos = pos - 1
+                        seq_pos = pos - (1 + offset)
 
                         if seq_pos < 0 or seq_pos >= len(sequence):
-                            if verbose:
-                                print(f"Warning: Position {pos} out of range, skipping")
+                            print(f"Warning: Position {pos} out of range, skipping")
                             valid_multi = False
                             break
-
                         if sequence[seq_pos] != wt:
-                            if verbose:
-                                print(f"Warning: Wild-type {wt} at pos {pos} doesn't match sequence {sequence[seq_pos]}, skipping")
+                            print(f"Warning: Wild-type {wt} at pos {pos} doesn't match sequence {sequence[seq_pos]}, skipping")
                             valid_multi = False
                             break
 
@@ -169,35 +119,29 @@ class MInterface(MInterface_base):
                 else:
                     match = re.match(r"([A-Z])(\d+)([A-Z])", mutation)
                     if not match:
-                        if verbose:
-                            print(f"Warning: Could not parse mutation {mutation}, skipping")
+                        print(f"Warning: Could not parse mutation {mutation}, skipping")
                         continue
 
                     wt, pos_str, mt = match.groups()
                     pos = int(pos_str)
-                    seq_pos = pos - 1
+                    seq_pos = pos - (1 + offset)
 
                     if seq_pos < 0 or seq_pos >= len(sequence):
-                        if verbose:
-                            print(f"Warning: Position {pos} out of range, skipping")
+                        print(f"Warning: Position {pos} out of range, skipping")
                         continue
 
                     if sequence[seq_pos] != wt:
-                        if verbose:
-                            print(f"Warning: Wild-type {wt} at pos {pos} doesn't match sequence {sequence[seq_pos]}, skipping")
+                        print(f"Warning: Wild-type {wt} at pos {pos} doesn't match sequence {sequence[seq_pos]}, skipping")
                         continue
 
                     parsed_mutations.append((wt, [pos], mt, [seq_pos], mutation))
                     unique_positions.add(pos)
-
             if not parsed_mutations:
-                if verbose:
-                    print("No valid mutations to score")
+                print("No valid mutations to score")
                 predict_dms = [0.0] * len(mutations)
             else:
                 unique_positions = sorted(list(unique_positions))
-                if verbose:
-                    print(f"Found {len(unique_positions)} unique mutation positions to pre-compute")
+                print(f"Found {len(unique_positions)} unique mutation positions to pre-compute")
 
                 aa_to_token = {}
                 amino_acids = "ACDEFGHIKLMNPQRSTVWY"
@@ -208,14 +152,13 @@ class MInterface(MInterface_base):
 
                 position_aa_scores = {}
                 num_batches = math.ceil(len(unique_positions) / batch_size)
-                progress_bar = tqdm(total=num_batches, desc="Pre-computing position scores") if verbose else None
-
+                progress_bar = tqdm(total=num_batches, desc="Pre-computing position scores")
                 for batch_idx in range(0, len(unique_positions), batch_size):
                     batch_positions = unique_positions[batch_idx:batch_idx + batch_size]
                     window_groups = {}
 
                     for pos in batch_positions:
-                        seq_pos = pos - 1
+                        seq_pos = pos - (1 + offset)
                         if len(sequence) > window_size:
                             window_half = (window_size) // 2
                             start_pos = max(0, seq_pos - window_half)
@@ -241,19 +184,18 @@ class MInterface(MInterface_base):
                         for rel_pos in unique_rel_positions:
                             masked_seq = list(seq_window)
                             masked_seq[rel_pos] = tokenizer.mask_token
-                            input_items.append({
+                            input_items.append({ # 保留原 construct_batch 用法
                                 "seq": ''.join(masked_seq),
-                                "X": None,  # 保留原 construct_batch 用法
+                                "X": coordinates,  
                                 "name": f"masked_pos_{rel_pos}",
                                 "label": 1.0
                             })
                             rel_pos_map[len(input_items) - 1] = rel_pos
 
-                        # 用你的 batch + forward 调用方式
                         with torch.no_grad():
                             batch = model.construct_batch(input_items)
                             outputs = model.forward(batch=batch, return_logits=True)
-                            batch_logits = outputs[:, 1:-1, :]  # [batch, seq_len, vocab_size]
+                            batch_logits = outputs[:, self.start:self.end, :]  # [batch, seq_len, vocab_size]
 
                         for idx, rel_pos in rel_pos_map.items():
                             logits = batch_logits[idx, rel_pos, :]
@@ -273,10 +215,9 @@ class MInterface(MInterface_base):
                     progress_bar.close()
 
                 mutation_scores = {}
-                if verbose:
-                    print("Calculating scores for all mutations using pre-computed values")
+                print("Calculating scores for all mutations using pre-computed values")
 
-                for wt, pos_list, mt, seq_pos_list, mutation_name in tqdm(parsed_mutations, desc="Scoring mutations") if verbose else parsed_mutations:
+                for wt, pos_list, mt, seq_pos_list, mutation_name in tqdm(parsed_mutations, desc="Scoring mutations"):
                     cumulative_score = 0.0
                     for i, (pos, aa_mt) in enumerate(zip(pos_list, mt)):
                         aa_wt = wt[i] if i < len(wt) else wt
@@ -285,15 +226,15 @@ class MInterface(MInterface_base):
                             mt_score = position_aa_scores[pos][aa_mt]
                             cumulative_score += (mt_score - wt_score)
                         else:
-                            if verbose:
-                                print(f"Warning: Position {pos} not found in pre-computed scores, mutation {mutation_name} may be incomplete")
+                            print(f"Warning: Position {pos} not found in pre-computed scores, mutation {mutation_name} may be incomplete")
                     mutation_scores[mutation_name] = cumulative_score
 
                 predict_dms = [mutation_scores.get(mut, 0.0) for mut in mutations]
         else:
-            # this is similarity logic, please write here
+            # this is similarity logic
             batch["max_length"][0] = len(target_sequence)
             target_sequence = target_sequence[pdb_range[0]:pdb_range[1]]
+            offset = pdb_range[0].item() if isinstance(pdb_range[0], torch.Tensor) else pdb_range[0]
             if isinstance(self.model.pretrain_model, ProSTModel):
                 target_sequence = target_sequence[:1022]
             self.model.pretrain_model.max_length = len(target_sequence)
@@ -309,11 +250,9 @@ class MInterface(MInterface_base):
             with torch.no_grad():
                 try:
                     wt_batch = self.model.pretrain_model.construct_batch(wt_input)
-                    wt_logits = self.model.pretrain_model.forward(batch=wt_batch,  post_process=False, return_logits=True).squeeze(0)[1:-1,:]
-                    # wt_emb = wt_logits.mean(0).view(-1)  # Flatten embedding
+                    wt_logits = self.model.pretrain_model.forward(batch=wt_batch, return_logits=True).squeeze(0)[self.start:self.end,:]
                 except Exception:
                     return None
-
             # Step 2: Prepare mutant inputs
             mutant_inputs = []
             selected_true_dms_scores = []
@@ -322,7 +261,7 @@ class MInterface(MInterface_base):
                 mut_positions = []
                 for mut in mutant.split(":"):
                     wt_res, pos_str, mut_res = mut[0], mut[1:-1], mut[-1]
-                    pos = int(pos_str) - (1 + pdb_range[0])
+                    pos = int(pos_str) - (1 + offset)
                     if isinstance(self.model.pretrain_model, ProSTModel):
                         if pos > 1020:
                             continue
@@ -338,7 +277,7 @@ class MInterface(MInterface_base):
                 selected_true_dms_scores.append(true_dms_scores[j])
             # Step 3: Batch inference and compute similarity scores
             predict_dms = []
-            batch_size = 16  # 根据显存调整
+            batch_size = 8  # 根据显存调整
             for i in tqdm(range(0, len(mutant_inputs), batch_size), desc=f"Processing {dms_id} (Similarity)..."):
                 batch_mutants = mutant_inputs[i:i + batch_size]
                 batch_scores = selected_true_dms_scores[i:i + batch_size]
@@ -346,7 +285,7 @@ class MInterface(MInterface_base):
                 with torch.no_grad():
                     try:
                         mut_batch = self.model.pretrain_model.construct_batch(batch_mutants)
-                        mut_logits = self.model.pretrain_model.forward(batch=mut_batch, post_process=False, return_logits=True)[:, 1:-1, :]
+                        mut_logits = self.model.pretrain_model.forward(batch=mut_batch, return_logits=True)[:, self.start:self.end, :]
                     except Exception as e:
                         # 如果失败，把对应的 true scores 删掉
                         print(f"Batch {i}-{i+batch_size} failed with error: {e}")
@@ -358,18 +297,18 @@ class MInterface(MInterface_base):
                     if isinstance(self.model.pretrain_model, ProtGPT2Model):
                         wt_emb_mean = wt_logits.mean(0)
                         mut_emb_mean = mut_emb.mean(0)
-                        cos_sim = F.cosine_similarity(wt_emb_mean, mut_emb_mean, dim=0).item()
+                        similarity = -1.0 * local_l2_difference_single(wt_emb_mean, mut_emb_mean, [0], window_size=0)
                     else:
                         # 对于 residue-level embedding，取突变位置的 embedding
                         mut_pos = mut_positions_batch[j]
-                        wt_emb_mut = wt_logits[mut_pos, :].mean(0)  # 突变位点平均
-                        mut_emb_mut = mut_emb[mut_pos, :].mean(0)
-                        cos_sim = F.cosine_similarity(wt_emb_mut, mut_emb_mut, dim=0).item()
-                    score = cos_sim
+                        # wt_emb_mut = wt_logits[mut_pos, :].mean(0)  # 突变位点平均
+                        # mut_emb_mut = mut_emb[mut_pos, :].mean(0)
+                        similarity = -1.0 * local_l2_difference_single(wt_logits, mut_emb, mut_pos, window_size=5)
+                    score = similarity
                     predict_dms.append(score)
 
-        assert len(predict_dms) == len(selected_true_dms_scores)
-        true_dms_scores = selected_true_dms_scores
+        assert len(predict_dms) == len(true_dms_scores)
+        # true_dms_scores = true_dms_scores
         spearman = spearmanr(np.array(predict_dms), np.array(true_dms_scores)).statistic
         log_dict = {
             "test_spearman": spearman
@@ -386,4 +325,27 @@ class MInterface(MInterface_base):
         self.log_dict(metric, prog_bar=True, logger=True, on_epoch=True)
 
 
-        
+def local_l2_difference_single(wt_emb, mut_emb, mut_pos_list, window_size=5):
+    """
+    Args:
+        wt_emb: (L, d) wild-type embedding
+        mut_emb: (L, d) mutant embedding
+        mut_pos_list: list of int, 突变位点列表
+        window_size: int
+
+    Returns:
+        score: float (单个样本的局部L2差异)
+    """
+    L, d = wt_emb.shape
+    window_indices = set()
+    for pos in mut_pos_list:
+        start = max(pos - window_size, 0)
+        end = min(pos + window_size + 1, L)
+        window_indices.update(range(start, end))
+    window_indices = sorted(window_indices)
+
+    wt_local = wt_emb[window_indices, :]  # (window_len, d)
+    mut_local = mut_emb[window_indices, :]  # (window_len, d)
+    delta = mut_local - wt_local
+    score = torch.norm(delta)  # Frobenius norm
+    return score.item()

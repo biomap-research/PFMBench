@@ -29,6 +29,8 @@ Task:
   task_name: "fold_prediction"
   task_type: "classification"
   num_classes: 1195
+  # metric: "valid_acc"
+  # direction: "max"
 
 hydra:
   output_subdir: null

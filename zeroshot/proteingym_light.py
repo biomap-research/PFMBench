@@ -38,11 +38,11 @@ def create_parser():
     parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--gpus_per_node', default=1, type=int)
     
-    parser.add_argument('--dms_csv_dir', default='/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark_new/protein_benchmark/datasets/DMS_ProteinGym_substitutions', type=str)
-    parser.add_argument('--dms_pdb_dir', default='/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark_new/protein_benchmark/datasets/DMS_ProteinGym_substitutions/ProteinGym_AF2_structures', type=str)
-    parser.add_argument('--dms_reference_csv_path', default='/nfs_beijing/kubeflow-user/wanghao/workspace/ai4sci/protein_benchmark_new/protein_benchmark/datasets/DMS_ProteinGym_substitutions/ProteinGym_AF2_structures/DMS_substitutions.csv', type=str)
+    parser.add_argument('--dms_csv_dir', default='/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/DMS_ProteinGym_substitutions', type=str)
+    parser.add_argument('--dms_pdb_dir', default='/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/DMS_ProteinGym_substitutions/ProteinGym_AF2_structures', type=str)
+    parser.add_argument('--dms_reference_csv_path', default='/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/DMS_ProteinGym_substitutions/ProteinGym_AF2_structures/DMS_substitutions.csv', type=str)
 
-    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm', 'prott5', 'dplm', 'ontoprotein', 'ankh_base', 'pglm'])
+    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm', 'prott5', 'dplm', 'ontoprotein', 'ankh_base', 'pglm', 'pglm-3b'])
     parser.add_argument("--config_name", type=str, default='fitness_prediction', help="Name of the Hydra config to use")
    
     args = process_args(parser, config_path='../../tasks/configs')
@@ -67,7 +67,7 @@ def main():
         os.environ["WANDB_MODE"] = "offline"
     wandb.init(project='protein_benchmark', entity='biomap_ai', dir=str(os.path.join(args.res_dir, args.ex_name)))
     logger = plog.WandbLogger(
-                    project = 'protein_benchmark',
+                    project='protein_benchmark',
                     name=args.ex_name,
                     save_dir=str(os.path.join(args.res_dir, args.ex_name)),
                     dir = str(os.path.join(args.res_dir, args.ex_name)),
@@ -92,7 +92,7 @@ def main():
     trainer_config = {
         "accelerator": "gpu",
         "strategy": 'ddp', # 'ddp', 'deepspeed_stage_2
-        'devices': args.gpus_per_node,
+        'devices': gpu_count,
         "precision": 'bf16', # "bf16", 16
         'accelerator': 'gpu',  # Use distributed data parallel
         'logger': logger,

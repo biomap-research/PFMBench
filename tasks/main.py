@@ -9,6 +9,7 @@ os.environ["WANDB_API_KEY"] = "ddb1831ecbd2bf95c3323502ae17df6e1df44ec0" # wh
 import warnings
 warnings.filterwarnings("ignore")
 import argparse
+import pandas as pd
 import torch
 from pytorch_lightning.trainer import Trainer
 import pytorch_lightning as pl
@@ -48,9 +49,19 @@ def create_parser():
     # Model parameters
     parser.add_argument('--sequence_only', default=0, type=int)
     parser.add_argument('--finetune_type', default='adapter', type=str, choices=['adapter', 'peft'])
-    parser.add_argument('--peft_type', default='adalora', type=str, choices=['lora', 'adalora', 'ia3', 'prefix_tuning', 'freeze'])
-    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=['esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm', 'prott5', 'dplm', 'ontoprotein', 'ankh_base', 'pglm', 'esm2_35m', 'esm2_150m', 'esm2_3b',  'esm2_15b', 'protrek_35m'])
+    parser.add_argument('--peft_type', default='adalora', type=str, choices=['lora', 'adalora', 'ia3', 'dora', 'freeze'])
+    parser.add_argument('--pretrain_model_name', default='esm2_650m', type=str, choices=[
+        'esm2_650m', 'esm3_1.4b', 'esmc_600m', 'procyon', 'prollama', 'progen2', 'prostt5', 
+        'protgpt2', 'protrek', 'saport', 'gearnet', 'prost', 'prosst2048', 'venusplm', 
+        'prott5', 'dplm', 'ontoprotein', 'ankh_base', 'pglm', 'esm2_35m', 'esm2_150m', 
+        'esm2_3b',  'esm2_15b', 'protrek_35m', 'saport_35m', 'saport_1.3b', 'dplm_150m', 'dplm_3b', 'pglm-3b'
+    ])
     parser.add_argument("--config_name", type=str, default='fitness_prediction', help="Name of the Hydra config to use")
+    parser.add_argument("--metric", type=str, default='val_loss', help="metric for early stop")
+    parser.add_argument("--direction", type=str, default='min', help="metric direction")
+    parser.add_argument("--enable_es", type=int, default=1, help="enable early stopping")
+    parser.add_argument("--feature_extraction", type=int, default=0, help="perform feature extraction(paper used only)")
+    parser.add_argument("--feature_save_dir", type=str, default=None, help="feature saved dir(paper used only)")
    
     args = process_args(parser, config_path='../../tasks/configs')
     print(args)
@@ -63,15 +74,17 @@ def load_callbacks(args):
     logdir = str(os.path.join(args.res_dir, args.ex_name))
     
     ckptdir = os.path.join(logdir, "checkpoints")
-    
 
-    metric = "val_loss"
+    metric = "val_loss" if args.metric is None else args.metric
+    direction = "min" if args.direction is None else args.direction
+    # metric = "val_loss"
+    print(f"metric: {metric}, direction: {direction}")
     sv_filename = 'best-{epoch:02d}-{val_loss:.4f}'
     callbacks.append(plc.ModelCheckpoint(
         monitor=metric,
         filename=sv_filename,
         save_top_k=3,
-        mode='min',
+        mode=direction,
         save_last=True,
         dirpath = ckptdir,
         verbose = True,
@@ -92,13 +105,14 @@ def load_callbacks(args):
                 argv_content = sys.argv + ["gpus: {}".format(torch.cuda.device_count())],)
     )
     
-    early_stop_callback = EarlyStopping(
-        monitor=metric,   # 必须和你的 validation step log 出来的 key 一致
-        patience=5,
-        mode="min",           # loss 下降才是“好”，因此用 min
-        strict=True,
-    )
-    callbacks.append(early_stop_callback)
+    if args.enable_es:
+        early_stop_callback = EarlyStopping(
+            monitor=metric,   # 必须和你的 validation step log 出来的 key 一致
+            patience=5,
+            mode=direction,           # loss 下降才是“好”，因此用 min
+            strict=True,
+        )
+        callbacks.append(early_stop_callback)
     
     if args.lr_scheduler:
         callbacks.append(plc.LearningRateMonitor(
@@ -141,6 +155,33 @@ def main():
     print(f"Generated random seed: {args.seed}")
     pl.seed_everything(args.seed)
     data_module = DInterface(**vars(args))
+
+    # here we perform feature extraction
+    if args.feature_extraction and args.finetune_type == "adapter":
+        data_module.data_setup(target="test")
+        feature_save_dir = "./feature_extraction" if not args.feature_save_dir else args.feature_save_dir
+        os.makedirs(feature_save_dir, exist_ok=True)
+        config_res_dir = os.path.join(feature_save_dir, args.config_name)
+        os.makedirs(config_res_dir, exist_ok=True)
+        result_parquet = f"{args.pretrain_model_name}-{args.config_name}.parquet"
+        result_parquet = os.path.join(config_res_dir, result_parquet)
+        test_dataset = data_module.test_set
+        results = []
+        for sdata in test_dataset.data:
+            embedding = sdata['embedding'].mean(0).flatten().float().numpy()
+            label = sdata['label'].numpy().item() # only for multi-label classification tasks
+            results.append(
+                {
+                    "embedding": embedding,
+                    "label": label,
+                    "model": f"{args.pretrain_model_name}"
+                }
+            )
+        results = pd.DataFrame(results)
+        results.to_parquet(result_parquet, index=False, engine="pyarrow")
+        print(f"[Feature extraction] Result parquet: {result_parquet}")
+        return 
+    
     data_module.data_setup()
     gpu_count = torch.cuda.device_count()
     steps_per_epoch = math.ceil(len(data_module.train_set)/args.batch_size/gpu_count)

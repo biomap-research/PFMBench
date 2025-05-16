@@ -29,6 +29,8 @@ Task:
   task_name: "ppi_affinity"
   task_type: "pair_regression"
   num_classes: 1
+  # metric: "valid_spearman"
+  # direction: "max"
 
 hydra:
   output_subdir: null

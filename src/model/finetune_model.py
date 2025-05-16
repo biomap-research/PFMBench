@@ -18,10 +18,10 @@ class UniModel(nn.Module):
         self.finetune_type = finetune_type
         hid_dim = 480
         if pretrain_model_name == 'esm2_35m':
-            self.input_dim = 320
+            self.input_dim = 480
         
         if pretrain_model_name == 'esm2_150m':
-            self.input_dim = 512
+            self.input_dim = 640
             
         if pretrain_model_name == 'esm2_650m':
             self.input_dim = 1280
@@ -48,12 +48,18 @@ class UniModel(nn.Module):
             self.input_dim = 1280
             
         if pretrain_model_name == 'protrek_35m':
-            self.input_dim = 320
+            self.input_dim = 480*2
             
         if pretrain_model_name == 'protrek':
             self.input_dim = 1920
         
         if pretrain_model_name == 'saport':
+            self.input_dim = 1280
+
+        if pretrain_model_name == 'saport_35m':
+            self.input_dim = 480
+        
+        if pretrain_model_name == 'saport_1.3b':
             self.input_dim = 1280
 
         if pretrain_model_name == 'procyon':
@@ -79,6 +85,12 @@ class UniModel(nn.Module):
         
         if pretrain_model_name == 'dplm':
             self.input_dim = 1280
+
+        if pretrain_model_name == 'dplm_150m':
+            self.input_dim = 640
+
+        if pretrain_model_name == 'dplm_3b':
+            self.input_dim = 2560
         
         if pretrain_model_name == 'ontoprotein':
             self.input_dim = 1024
@@ -88,26 +100,31 @@ class UniModel(nn.Module):
             
         if pretrain_model_name == 'pglm':
             self.input_dim = 2048
+        
+        if pretrain_model_name == "pglm-3b":
+            self.input_dim = 2560
             
 
         self.smiles_proj = nn.Sequential(
             nn.Linear(2048, hid_dim),
-            nn.GELU()
+            # nn.GELU()
         )
         self.proj = nn.Sequential(
             nn.Linear(self.input_dim, hid_dim),
-            nn.LayerNorm(hid_dim)
+            # nn.LayerNorm(hid_dim)
         )
+        self.layernorm = nn.LayerNorm(hid_dim)
         if finetune_type == 'adapter':
             self.adapter = TransformerAdapter(
-                    input_dim=hid_dim,               # 输入维度
-                    hidden_dim=hid_dim,          # 隐藏层维度
-                    num_layers=6,                # Transformer 层数
-                    num_heads=20,                 # 多头注意力头数
-                )
+                input_dim=hid_dim,               # 输入维度
+                hidden_dim=hid_dim,          # 隐藏层维度
+                num_layers=6,                # Transformer 层数
+                num_heads=20,                 # 多头注意力头数
+            )
         elif finetune_type == 'peft': 
             self.pretrain_model_interface = PretrainModelInterface(
-                pretrain_model_name
+                pretrain_model_name,
+                task_type=self.task_type
             )
             self.pretrain_model_interface.setup_peft(
                 peft_type=peft_type,
@@ -163,16 +180,18 @@ class UniModel(nn.Module):
                 smiles_attention_mask = torch.ones(attention_mask.shape[0], 1, device=attention_mask.device).bool()
                 proj_output = torch.cat((smiles_proj_output, proj_output), dim=1).contiguous()
                 attention_mask = torch.cat((smiles_attention_mask, attention_mask), dim=-1).contiguous()
+                
+        proj_output = self.layernorm(proj_output)
             
-        if self.task_type == 'contact': # resideu-level
+        if self.task_type == 'contact': # residue-level
             logits = self.task_head(proj_output)
-            loss = self.loss(logits, labels, attention_mask)
+            loss = self.loss(logits, labels.float(), attention_mask)
             return {'loss': loss, 'logits': logits, 'label': labels, 'attention_mask': attention_mask}
         elif self.task_type == 'residual_classification': # resideu-level
             logits = self.task_head(proj_output)
             logits = logits[attention_mask]
             labels = labels[attention_mask]
-            loss = self.loss(logits, labels)
+            loss = self.loss(logits, labels.long())
             return {'loss': loss, 'logits': logits, 'label': labels, 'attention_mask': attention_mask}
         else: # sequence-level
             pooled_output = torch.mean(proj_output, dim=1)
@@ -181,6 +200,12 @@ class UniModel(nn.Module):
                 labels = labels.float()
                 if labels.ndim == 1:
                     labels = labels.unsqueeze(1)
+            elif isinstance(self.loss, nn.CrossEntropyLoss):
+                # logits = logits.float()
+                labels = labels.long()
+            else:
+                # MSELoss, L1Loss 等
+                labels = labels.to(logits.dtype)
             loss = self.loss(logits, labels)
             return {'loss': loss, 'logits': logits, 'label': labels, 'attention_mask': attention_mask}
         

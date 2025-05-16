@@ -21,14 +21,17 @@ Training:
 Model:
   pretrain_model_name: 'saport'
   finetune_type: 'adapter'
+  peft_type: 'lora'
   lora_r: 8                  # 低秩矩阵的秩
-  lora_alpha: 32             # LoRA 的 alpha 参数
+  lora_alpha: 16             # LoRA 的 alpha 参数
   lora_dropout: 0.1          # Dropout 防止过拟合
 
 Task:
   task_name: "deep_loc2_multi"
   task_type: "multi_labels_classification"
   num_classes: 10
+  # metric: "valid_f1_max"
+  # direction: "max"
 
 hydra:
   output_subdir: null

@@ -29,6 +29,8 @@ Task:
   task_name: "deeploc_multi"
   task_type: "classification"
   num_classes: 10
+  # metric: "valid_acc"
+  # direction: "max"
 
 hydra:
   output_subdir: null

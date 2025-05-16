@@ -30,6 +30,8 @@ Task:
   task_name: "enzyme_commission_number"
   task_type: "multi_labels_classification"
   num_classes: 585
+  # metric: "valid_f1_max"
+  # direction: "max"
 
 hydra:
   output_subdir: null

@@ -29,6 +29,8 @@ Task:
   task_name: "deepsol"
   task_type: "binary_classification"
   num_classes: 1
+  # metric: "valid_auroc"
+  # direction: "max"
 
 hydra:
   output_subdir: null

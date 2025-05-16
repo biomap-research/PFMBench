@@ -170,7 +170,8 @@ class MInterface(MInterface_base):
         elif self.hparams.task_type == "residual_classification":
             target_valid = []
             for i in range(len(target)):
-                target_valid.append(target[i][attn_mask[i].astype(bool)])
+                target_valid.append(target[i])
+                # target_valid.append(target[i][attn_mask[i].astype(bool)])
             preds, target = np.vstack(preds), np.hstack(target_valid) 
             preds = np.argmax(preds, axis=-1)
             acc = (preds == target).mean()

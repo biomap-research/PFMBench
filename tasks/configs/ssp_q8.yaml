@@ -21,14 +21,17 @@ Training:
 Model:
   pretrain_model_name: 'esm2_650m'
   finetune_type: 'adapter'
+  peft_type: 'lora'
   lora_r: 8                  # 低秩矩阵的秩
-  lora_alpha: 32             # LoRA 的 alpha 参数
+  lora_alpha: 16             # LoRA 的 alpha 参数
   lora_dropout: 0.1          # Dropout 防止过拟合
 
 Task:
   task_name: "ssp_q8"
   task_type: "residual_classification"
   num_classes: 8
+  # metric: "valid_acc"
+  # direction: "max"
 
 hydra:
   output_subdir: null

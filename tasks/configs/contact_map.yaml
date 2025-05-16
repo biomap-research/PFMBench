@@ -29,6 +29,8 @@ Task:
   task_name: "contact_map"
   task_type: "contact"
   num_classes: 1
+  # metric: "valid_Top(L/5)"
+  # direction: "max"
 
 hydra:
   output_subdir: null

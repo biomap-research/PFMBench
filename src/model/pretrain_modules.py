@@ -22,10 +22,10 @@ from model_zoom.esm.utils.sampling import _BatchedESMProteinTensor
 from model_zoom.ProTrek.model.ProTrek.protrek_trimodal_model import ProTrekTrimodalModel
 from vplm import TransformerForMaskedLM, TransformerConfig
 from vplm import VPLMTokenizer
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import TaskType, get_peft_model
+from peft import IA3Config, AdaLoraConfig, LoraConfig
 from vplm import VPLMTokenizer
-from peft import IA3Config, TaskType
-from peft import PrefixTuningConfig, AdaLoraConfig
+
 
 MODEL_ZOOM_PATH = '/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom'
 
@@ -131,10 +131,18 @@ class ESM2Model(BaseProteinModel, UtilsModel):
                     target_modules=["query", "value", "dense"],  # 应用 IA³ 的模块
                     feedforward_modules=["dense"],             # 在 MLP 层加 IA³
                 )
-            elif peft_type == "prefix_tuning":
-                peft_config = PrefixTuningConfig(
-                    task_type=TaskType.FEATURE_EXTRACTION, 
-                    num_virtual_tokens=20,                  # 前缀 token 数
+            elif peft_type == "dora":
+                lora_r, lora_alpha, lora_dropout = kwargs.get("lora_r", 8), \
+                                                kwargs.get("lora_alpha", 16), \
+                                                kwargs.get("lora_dropout", 0.1)
+                peft_config = LoraConfig(
+                                task_type=TaskType.FEATURE_EXTRACTION,
+                                use_dora=True,
+                                inference_mode=False,
+                                r=lora_r,
+                                lora_alpha=lora_alpha,
+                                lora_dropout=lora_dropout,
+                                target_modules=["query", "value"],  # 仅调整 Attention 的 query 和 value
                 )
             elif peft_type == "adalora":
                 lora_r, lora_alpha, lora_dropout = kwargs.get("lora_r", 8), \
@@ -286,26 +294,33 @@ class ESM3Model(BaseProteinModel, UtilsModel):
             constant_value=pad_id,
         ).to(self.device)
         protein_tensor = _BatchedESMProteinTensor(sequence=sequence_tokens,
-                                                          structure=structure_tokens_batch, coordinates=coordinates_batch).to(self.device)
+                                                  structure=structure_tokens_batch, coordinates=coordinates_batch).to(self.device)
         return {
             'name': names,
-            'protein_tensor': protein_tensor,
+            'seq': protein_tensor,
             'attention_mask': torch.stack([m.bool() for m in masks]).to(self.device),
             'label': labels
         }
 
     def forward(self, batch, post_process=True, task_type='binary_classification', return_logits=False, **kwargs):
-        tens, mask = batch['protein_tensor'], batch['attention_mask']
+        tens, mask = batch['seq'], batch['attention_mask']
+        if return_logits:
+            out = self.model.logits(
+                tens, LogitsConfig(
+                    sequence=True, structure=False, secondary_structure=False,
+                    sasa=False, function=False, residue_annotations=False, return_embeddings=True
+                )
+            )
+            logits = out.logits.sequence
+            return logits
+
         out = self.model.logits(
             tens, LogitsConfig(
                 sequence=True, structure=True, secondary_structure=True,
                 sasa=True, function=True, residue_annotations=True, return_embeddings=True
             )
         )
-        if return_logits:
-            logits = out.logits.sequence
-            return logits
-    
+
         embeddings = out.embeddings
         ends = mask.sum(dim=-1) - 1
         start = 1
@@ -347,13 +362,13 @@ class ESMC600MModel(BaseProteinModel, UtilsModel):
         protein_tensor = _BatchedESMProteinTensor(sequence=sequence_tokens).to(self.device)
         return {
             'name': names,
-            'protein_tensor': protein_tensor,
+            'seq': protein_tensor,
             'attention_mask': torch.stack([m.bool() for m in masks]).to(self.device),
             'label': labels
         }
     
     def forward(self, batch, post_process=True, task_type='binary_classification', return_logits=False, **kwargs):
-        tens, mask = batch['protein_tensor'], batch['attention_mask']
+        tens, mask = batch['seq'], batch['attention_mask']
         outputs = self.model.logits(tens, LogitsConfig(sequence=True, return_embeddings=True))
 
         if return_logits:
@@ -586,21 +601,20 @@ class ProSTModel(BaseProteinModel, UtilsModel):
                 trust_remote_code=True, 
                 torch_dtype=torch.bfloat16
             ).to(self.device)
-        self.model = self.model.protein_model
+        self.model = self.prost.protein_model
         self.tokenizer = AutoTokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/esm1b_650m")
         self.max_length = max_length
-        self.alphabet = self.tokenizer.all_tokens
-        
-        self.logit_scale = self.prost.logit_scale
-        alphabet_tokens = self.tokenizer(self.alphabet)
-        with torch.no_grad():
-            alphabet_seqs = torch.tensor(alphabet_tokens["input_ids"]).to(self.device)
-            alphabet_ams = torch.tensor(alphabet_tokens["attention_mask"]).to(self.device)
-            self.label_features = self.prost(
-                input_ids=alphabet_seqs, 
-                attention_mask=alphabet_ams,
-                return_dict=True
-            ).residue_feature[:,1:-1,:].squeeze(1) # (33, 512)
+        # self.alphabet = self.tokenizer.all_tokens
+        # self.logit_scale = self.prost.logit_scale
+        # alphabet_tokens = self.tokenizer(self.alphabet)
+        # with torch.no_grad():
+        #     alphabet_seqs = torch.tensor(alphabet_tokens["input_ids"]).to(self.device)
+        #     alphabet_ams = torch.tensor(alphabet_tokens["attention_mask"]).to(self.device)
+        #     self.label_features = self.model(
+        #         input_ids=alphabet_seqs, 
+        #         attention_mask=alphabet_ams,
+        #         return_dict=True
+        #     ).residue_feature[:,1:-1,:].squeeze(1).unsqueeze(0).contiguous() # (33, 512)
 
     def get_tokenizer(self):
         return self.tokenizer
@@ -624,9 +638,15 @@ class ProSTModel(BaseProteinModel, UtilsModel):
             'label': labels
         }
 
-    def forward(self, batch, post_process=True, task_type='binary_classification', **kwargs):
+    def forward(self, batch, post_process=True, task_type='binary_classification', return_logits=False, **kwargs):
         out = self.model(input_ids=batch['seq'], attention_mask=batch['attention_mask'], return_dict=True)
         emb = out.residue_feature
+        if return_logits:
+            # emb_feature = emb / emb.norm(dim=-1, keepdim=True)
+            # label_features = self.label_features.expand((emb.shape[0], -1, -1))
+            # logits = self.logit_scale * emb @ label_features.permute(0, 2, 1)
+            return emb
+        
         ends = batch['attention_mask'].sum(dim=-1) - 1; start = 1
         if post_process:
             return self.post_process_cpu(batch, emb, batch['attention_mask'], start, ends, task_type)
@@ -711,10 +731,18 @@ class ProstT5Model(BaseProteinModel, UtilsModel):
                     target_modules=["q", "v", "wi", "wo"],  # 应用 IA³ 的模块
                     feedforward_modules=["wi", "wo"],             # 在 MLP 层加 IA³
                 )
-            elif peft_type == "prefix_tuning":
-                peft_config = PrefixTuningConfig(
-                    task_type=TaskType.FEATURE_EXTRACTION, 
-                    num_virtual_tokens=20,                  # 前缀 token 数
+            elif peft_type == "dora":
+                lora_r, lora_alpha, lora_dropout = kwargs.get("lora_r", 8), \
+                                                kwargs.get("lora_alpha", 16), \
+                                                kwargs.get("lora_dropout", 0.1)
+                peft_config = LoraConfig(
+                                task_type=TaskType.FEATURE_EXTRACTION,
+                                use_dora=True,
+                                inference_mode=False,
+                                r=lora_r,
+                                lora_alpha=lora_alpha,
+                                lora_dropout=lora_dropout,
+                                target_modules=["q", "v"],  # 仅调整 Attention 的 query 和 value
                 )
             elif peft_type == "adalora":
                 lora_r, lora_alpha, lora_dropout = kwargs.get("lora_r", 8), \
@@ -784,7 +812,7 @@ class ProstT5Model(BaseProteinModel, UtilsModel):
             'label': labels
         }
 
-    def forward(self, batch, post_process=True, task_type='binary_classification', **kwargs):
+    def forward(self, batch, post_process=True, task_type='binary_classification', return_logits=False, **kwargs):
         seq, attention_mask = batch['seq'], batch['attention_mask']
         embedding_repr = self.model(
                         seq,
@@ -793,12 +821,13 @@ class ProstT5Model(BaseProteinModel, UtilsModel):
         last = embedding_repr.last_hidden_state
         # embeddings = embeddings.reshape(embeddings.shape[0]//2, 2, embeddings.shape[1], embeddings.shape[2])
         # embeddings = torch.cat([embeddings[:,0], embeddings[:,1]], dim=-1)
-                
         # reshape back [B,2,L,H] -> concat axes
         B2, L, H = last.size()
         b = len(batch['name'])
         last = last.view(b, 2, L, H)
         emb = torch.cat([last[:,0], last[:,1]], dim=-1)
+        if return_logits:
+            return emb
         mask = batch['attention_mask'][::2]  # use every two rows
         ends = mask.sum(dim=-1) - 1; start = 1
         if post_process:
@@ -859,12 +888,12 @@ class ProTrekModel(BaseProteinModel, UtilsModel):
             }
         if model_path == 'protrek_35m':
             config = {
-                "protein_config": f"{MODEL_ZOOM_PATH}/protrek_35M/esm2_t12_35M_UR50D",
-                "text_config": f"{MODEL_ZOOM_PATH}/protrek_35M/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext", 
-                "structure_config": f"{MODEL_ZOOM_PATH}/protrek_35M/foldseek_t12_35M", 
+                "protein_config": f"{MODEL_ZOOM_PATH}/protrek_35m/esm2_t12_35M_UR50D",
+                "text_config": f"{MODEL_ZOOM_PATH}/protrek_35m/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext", 
+                "structure_config": f"{MODEL_ZOOM_PATH}/protrek_35m/foldseek_t12_35M", 
                 "load_protein_pretrained": False,
                 "load_text_pretrained": False,
-                "from_checkpoint": f"{MODEL_ZOOM_PATH}/protrek_35M/ProTrek_35M_UniRef50.pt"
+                "from_checkpoint": f"{MODEL_ZOOM_PATH}/protrek_35m/ProTrek_35M_UniRef50.pt"
             }
         self.model = ProTrekTrimodalModel(**config).to(self.device)
         self.encoder_3di = mini3di.Encoder()
@@ -896,10 +925,18 @@ class ProTrekModel(BaseProteinModel, UtilsModel):
                     target_modules=["query", "value", "dense"],  # 应用 IA³ 的模块
                     feedforward_modules=["dense"],             # 在 MLP 层加 IA³
                 )
-            elif peft_type == "prefix_tuning":
-                peft_config = PrefixTuningConfig(
-                    task_type=TaskType.FEATURE_EXTRACTION, 
-                    num_virtual_tokens=20,                  # 前缀 token 数
+            elif peft_type == "dora":
+                lora_r, lora_alpha, lora_dropout = kwargs.get("lora_r", 8), \
+                                                kwargs.get("lora_alpha", 16), \
+                                                kwargs.get("lora_dropout", 0.1)
+                peft_config = LoraConfig(
+                            task_type=TaskType.FEATURE_EXTRACTION,
+                            inference_mode=False,
+                            use_dora=True,
+                            r=lora_r,
+                            lora_alpha=lora_alpha,
+                            lora_dropout=lora_dropout,
+                            target_modules=["query", "value"],  # 仅调整 Attention 的 query 和 value
                 )
             elif peft_type == "adalora":
                 lora_r, lora_alpha, lora_dropout = kwargs.get("lora_r", 8), \
@@ -917,7 +954,13 @@ class ProTrekModel(BaseProteinModel, UtilsModel):
                     deltaT=10,
                     target_modules=["query", "value"],
                 )
-            self.model = get_peft_model(self.model, peft_config)
+            protein_encoder = self.model.protein_encoder.model.esm
+            structure_encoder = self.model.structure_encoder.model.esm
+            protein_encoder = get_peft_model(protein_encoder, peft_config)
+            structure_encoder = get_peft_model(structure_encoder, peft_config)
+            self.model.protein_encoder.model.esm = protein_encoder
+            self.model.structure_encoder.model.esm = structure_encoder
+            # self.model = get_peft_model(self.model, peft_config)
 
     def construct_batch(self, batch):
         names, seqs, structs, masks, labels = [], [], [], [], []
@@ -955,11 +998,15 @@ class ProTrekModel(BaseProteinModel, UtilsModel):
     def forward(self, batch, post_process=True, task_type='binary_classification', return_logits=False, **kwargs):
         # get representations
         if return_logits:
-            seq_tokens = self.model.protein_encoder.tokenizer(batch['seq'], return_tensors='pt')
+            seq_tokens = self.model.protein_encoder.tokenizer.batch_encode_plus(batch['seq'], return_tensors="pt", padding=True)
             seq_tokens["input_ids"], seq_tokens["attention_mask"] = seq_tokens["input_ids"].to(self.device), seq_tokens["attention_mask"].to(self.device)
             seq_logits = self.model.protein_encoder(seq_tokens, get_mask_logits=True)[-1]
-            return seq_logits
 
+            # structure_tokens = self.model.structure_encoder.tokenizer.batch_encode_plus(batch['struct'], return_tensors="pt", padding=True)
+            # structure_tokens["input_ids"], structure_tokens["attention_mask"] = structure_tokens["input_ids"].to(self.device), structure_tokens["attention_mask"].to(self.device)
+            # struct_logits = self.model.structure_encoder(structure_tokens, get_mask_logits=True)[-1]
+            return seq_logits
+        
         prot = self.model.get_protein_repr(batch['seq'])
         struct = self.model.get_structure_repr(batch['struct']) 
         emb = torch.cat([prot, struct], dim=-1)
@@ -971,12 +1018,12 @@ class ProTrekModel(BaseProteinModel, UtilsModel):
 
 # SaPort - seq + struct
 class SaPortModel(BaseProteinModel, UtilsModel):
-    def __init__(self, device, max_length=1022, sequence_only=False):
+    def __init__(self, device, max_length=1022, model_path="SaPort/ckpt", sequence_only=False):
         super().__init__(device)
         from transformers import EsmTokenizer, EsmForMaskedLM
         self.encoder_3di = mini3di.Encoder()
-        self.tokenizer = EsmTokenizer.from_pretrained(f'{MODEL_ZOOM_PATH}/SaPort/ckpt')
-        self.model = EsmForMaskedLM.from_pretrained(f'{MODEL_ZOOM_PATH}/SaPort/ckpt').to(self.device)
+        self.tokenizer = EsmTokenizer.from_pretrained(f'{MODEL_ZOOM_PATH}/{model_path}')
+        self.model = EsmForMaskedLM.from_pretrained(f'{MODEL_ZOOM_PATH}/{model_path}').to(self.device)
         self.max_length = max_length
         self.sequence_only = sequence_only
 
@@ -1174,12 +1221,14 @@ class ProtT5(BaseProteinModel, UtilsModel):
             'label': labels
         }
 
-    def forward(self, batch, post_process=True, task_type='binary_classification', **kwargs):
+    def forward(self, batch, post_process=True, task_type='binary_classification', return_logits=False, **kwargs):
         embedding_repr = self.model(
             input_ids=batch['seq'],
             attention_mask=batch['attention_mask'],
         )
         embeddings = embedding_repr.last_hidden_state
+        if return_logits:
+            return embeddings
         ends = batch['attention_mask'].sum(dim=-1) - 1
         start = 1
         if post_process:
@@ -1187,11 +1236,11 @@ class ProtT5(BaseProteinModel, UtilsModel):
         return embeddings
 
 class DPLMModel(BaseProteinModel, UtilsModel):
-    def __init__(self, device, max_length=1022, **kwargs):
+    def __init__(self, device, max_length=1022, model_path="dplm_650m", **kwargs):
         super().__init__(device)
         from transformers import AutoTokenizer, AutoModelForMaskedLM
         self.model = AutoModelForMaskedLM.from_pretrained(f"{MODEL_ZOOM_PATH}/esm2_650m").to(self.device)
-        params = torch.load(f'{MODEL_ZOOM_PATH}/dplm_650m/pytorch_model.bin')
+        params = torch.load(f'{MODEL_ZOOM_PATH}/{model_path}/pytorch_model.bin')
         self.model.load_state_dict(params, strict=True)
         self.tokenizer = AutoTokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/esm2_650m")
         self.max_length = max_length
@@ -1352,12 +1401,14 @@ class ANKHBase(BaseProteinModel, UtilsModel):
             'label': labels
         }
 
-    def forward(self, batch, post_process=True, task_type='binary_classification', **kwargs):
+    def forward(self, batch, post_process=True, task_type='binary_classification', return_logits=False, **kwargs):
         embedding_repr = self.model(
             input_ids=batch['seq'],
             attention_mask=batch['attention_mask'],
         )
         embeddings = embedding_repr.last_hidden_state
+        if return_logits:
+            return embeddings
         ends = batch['attention_mask'].sum(dim=-1) - 1
         start = 1
         if post_process:
@@ -1365,11 +1416,20 @@ class ANKHBase(BaseProteinModel, UtilsModel):
         return embeddings
 
 class PGLMModel(BaseProteinModel, UtilsModel):
-    def __init__(self, device, max_length=1022, **kwargs):
+    def __init__(self, device, max_length=1022, model_path="proteinglm-1b-mlm", **kwargs):
         super().__init__(device)
         from transformers import AutoTokenizer, AutoModelForMaskedLM
-        self.tokenizer  = AutoTokenizer.from_pretrained(f"{MODEL_ZOOM_PATH}/proteinglm-1b-mlm", trust_remote_code=True, use_fast=True)
-        self.model = AutoModelForMaskedLM.from_pretrained(f"{MODEL_ZOOM_PATH}/proteinglm-1b-mlm",  trust_remote_code=True).to(self.device)
+        self.tokenizer  = AutoTokenizer.from_pretrained(
+            f"{MODEL_ZOOM_PATH}/{model_path}", 
+            trust_remote_code=True, 
+            local_files_only=True,
+            use_fast=True
+        )
+        self.model = AutoModelForMaskedLM.from_pretrained(
+            f"{MODEL_ZOOM_PATH}/{model_path}",  
+            trust_remote_code=True,
+            local_files_only=True
+        ).to(self.device)
         self.max_length = max_length
 
     def get_tokenizer(self):
@@ -1466,6 +1526,12 @@ if __name__ == "__main__":
         model = SaPortModel(device="cuda:0")
     if model_name == "prott5":
         model = ProtT5(device="cuda:0")
+    if model_name == "dplm":
+        model = DPLMModel(device="cuda:0")
+    if model_name == "dplm_150m":
+        model = DPLMModel(device="cuda:0", model_path="dplm_150m")
+    if model_name == "dplm_3b":
+        model = DPLMModel(device="cuda:0", model_path="dplm_3b")
     if model_name == "dplm":
         model = DPLMModel(device="cuda:0")
     if model_name == "pglm":

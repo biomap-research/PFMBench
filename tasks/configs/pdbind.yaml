@@ -4,9 +4,12 @@ Output:
   offline: ${eval:"int(${oc.env:OFFLINE, '1'})"}
 
 Data:
-  train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/mmseq_outdir/train.csv"
-  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/mmseq_outdir/val.csv"
-  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/mmseq_outdir/test.csv"
+  train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/pdbbind_train.csv"
+  val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/pdbbind_valid.csv"
+  test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/pdbbind_test.csv"
+  # train_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/mmseq_outdir/train.csv"
+  # val_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/mmseq_outdir/val.csv"
+  # test_data_path: "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/datasets/pdbind/mmseq_outdir/test.csv"
 
 Training:
   epoch: 50  # end epoch
@@ -21,14 +24,17 @@ Training:
 Model:
   pretrain_model_name: 'esm2_650m'
   finetune_type: 'adapter'
+  peft_type: 'lora'
   lora_r: 8                  # 低秩矩阵的秩
-  lora_alpha: 32             # LoRA 的 alpha 参数
+  lora_alpha: 16             # LoRA 的 alpha 参数
   lora_dropout: 0.1          # Dropout 防止过拟合
 
 Task:
   task_name: "pdbind"
   task_type: "regression"
   num_classes: 1
+  # metric: "valid_spearman"
+  # direction: "max"
 
 hydra:
   output_subdir: null

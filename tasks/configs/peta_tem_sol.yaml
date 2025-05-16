@@ -29,6 +29,8 @@ Task:
   task_name: "peta_tem_sol"
   task_type: "regression"
   num_classes: 1
+  # metric: "valid_spearman"
+  # direction: "max"
 
 hydra:
   output_subdir: null

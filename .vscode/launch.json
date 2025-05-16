@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "justMyCode": false,
+            "justMyCode": true,
             "env": {
                 "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/model_zoom",
                 "CUDA_VISIBLE_DEVICES": "0",
@@ -24,31 +24,33 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--config_name", "enzyme_commission_number",
-                "--pretrain_model_name", "procyon",
+                "--config_name", "ssp_q8",
+                "--pretrain_model_name", "esm2_35m",
                 "--num_workers", "1",
             ],
             "env": {
                 "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/",
-                "CUDA_VISIBLE_DEVICES": "0",
+                "CUDA_VISIBLE_DEVICES": "1",
             },
         },
         {
             "name": "zeroshot",
             "type": "debugpy",
             "request": "launch",
-            "program": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/zeroshot/proteingym_light.py",
+            "program": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/zeroshot/msa_kl_light.py",
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--config_name", "contact_map",
+                "--config_name", "fitness_prediction",
+                "--pretrain_model_name", "esm2_650m",
+                "--offline", "1"
             ],
             "env": {
                 "PYTHONPATH": "/nfs_beijing/kubeflow-user/zhangyang_2024/workspace/protein_benchmark/",
                 "CUDA_VISIBLE_DEVICES": "0",
-                // "CONFIG_NAME": "fitness_prediction",
-                // "EXP_NAME": "fitness_prediction",
-                // "OFFLINE": "1"
+                "CONFIG_NAME": "fitness_prediction",
+                "EXP_NAME": "fitness_prediction",
+                "OFFLINE": "1"
             },
         },
     ]

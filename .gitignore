@@ -36,3 +36,6 @@ datasets/
 results/
 *.pdb
 *.pickle
+/zeroshot/msa
+*config.json
+output_model_plots/
