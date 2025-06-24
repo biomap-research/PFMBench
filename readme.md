@@ -35,7 +35,9 @@ conda create -n pfmbench python=3.9 -y
 conda activate pfmbench
 
 # Install Python dependencies
-pip install -r requirements.txt
+conda env create -f environment.yml
+
+# Or you can use our Docker image via: docker pull whwendell/pfmbench:latest
 ```
 
 ---
@@ -71,6 +73,7 @@ PFMBench/
 │   └── proteingym_light.py  # light ProteinGym zero-shot
 ├── .gitignore
 ├── LICENSE
+├── environment.yml
 └── README.md
 ```
 
