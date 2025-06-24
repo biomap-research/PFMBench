@@ -30,10 +30,6 @@ PFMBench is a unified benchmark suite for evaluating Protein Foundation Models (
 git clone https://github.com/biomap-research/PFMBench.git
 cd PFMBench
 
-# (optional) create a conda env
-conda create -n pfmbench python=3.9 -y
-conda activate pfmbench
-
 # Install Python dependencies
 conda env create -f environment.yml
 
