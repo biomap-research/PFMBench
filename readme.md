@@ -116,9 +116,9 @@ If you use PFMBench in your work, please cite:
 ```bibtex
 @article{gao2025pfmbench,
   title={PFMBench: Protein Foundation Model Benchmark},
-  author={Gao, Zhangyang and Wang, Hao and Tan, Cheng and Xu, Chenrui and Liu, Mengdi and Chen, Bozhen and Chao, Linlin and Zhang, Xiaoming and Li, Stan Z.},
-  journal={under review},
-  year={2025},
+  author={Gao, Zhangyang and Wang, Hao and Tan, Cheng and Xu, Chenrui and Liu, Mengdi and Hu, Bozhen and Chao, Linlin and Zhang, Xiaoming and Li, Stan Z},
+  journal={arXiv preprint arXiv:2506.14796},
+  year={2025}
 }
 ```
 
