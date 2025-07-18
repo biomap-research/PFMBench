@@ -36,8 +36,8 @@ conda env create -f environment.yml
 # Or you can use our Docker image via: docker pull whwendell/pfmbench:latest
 
 # Prepare the model_zoom
-# User can put the model repo they are interest in the `model_zoom` directory
-# e.g. You can download the ESM2-650M to the model_zoom from using the huggingface-cli
+# User can put the model repo they are interested in the `model_zoom` directory
+# You can download the ESM2-650M to the model_zoom from using the huggingface-cli
 huggingface-cli download facebook/esm2_t33_650M_UR50D --local-dir=./model_zoom/esm2_650m
 
 # Here we provide model weight links used in the PFMBench:
@@ -52,6 +52,8 @@ huggingface-cli download facebook/esm2_t33_650M_UR50D --local-dir=./model_zoom/e
 # ProtT5: https://huggingface.co/Rostlab/prot_t5_xl_uniref50
 # SaProt: https://huggingface.co/westlake-repl/SaProt_650M_AF2
 # VenusPLM: https://huggingface.co/AI4Protein/VenusPLM-300M
+
+# Download data from: https://drive.google.com/drive/folders/16cjmxXAFyAW-9IwehwBOPfza-yHrX24_?usp=sharing
 ```
 
 ---
