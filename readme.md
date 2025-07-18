@@ -34,6 +34,24 @@ cd PFMBench
 conda env create -f environment.yml
 
 # Or you can use our Docker image via: docker pull whwendell/pfmbench:latest
+
+# Prepare the model_zoom
+# User can put the model repo they are interest in the `model_zoom` directory
+# e.g. You can download the ESM2-650M to the model_zoom from using the huggingface-cli
+huggingface-cli download facebook/esm2_t33_650M_UR50D --local-dir=./model_zoom/esm2_650m
+
+# Here we provide model weight links used in the PFMBench:
+# ESM2-650M: https://huggingface.co/facebook/esm2_t33_650M_UR50D
+# ESM-3: https://huggingface.co/EvolutionaryScale/esm3-sm-open-v1
+# ESM-C: https://huggingface.co/EvolutionaryScale/esmc-600m-2024-12
+# xTrimoPGLM: https://huggingface.co/biomap-research/proteinglm-1b-mlm
+# ProtST: https://huggingface.co/mila-intel/ProtST-esm1b 
+# ProstT5: https://huggingface.co/Rostlab/ProstT5
+# ProtGPT2: https://huggingface.co/nferruz/ProtGPT2
+# ProTrek: https://huggingface.co/westlake-repl/ProTrek_650M_UniRef50
+# ProtT5: https://huggingface.co/Rostlab/prot_t5_xl_uniref50
+# SaProt: https://huggingface.co/westlake-repl/SaProt_650M_AF2
+# VenusPLM: https://huggingface.co/AI4Protein/VenusPLM-300M
 ```
 
 ---
@@ -67,6 +85,7 @@ PFMBench/
 │   ├── msa_kl_light.py      # light MSA KL-div zero-shot
 │   ├── msa_kl_light copy.py # (backup—can remove)
 │   └── proteingym_light.py  # light ProteinGym zero-shot
+├── model_zoom/              # 3rd-party model repo
 ├── .gitignore
 ├── LICENSE
 ├── environment.yml
