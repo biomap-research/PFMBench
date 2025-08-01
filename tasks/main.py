@@ -107,9 +107,9 @@ def load_callbacks(args):
     
     if args.enable_es:
         early_stop_callback = EarlyStopping(
-            monitor=metric,   # 必须和你的 validation step log 出来的 key 一致
+            monitor=metric,
             patience=5,
-            mode=direction,           # loss 下降才是“好”，因此用 min
+            mode=direction,
             strict=True,
         )
         callbacks.append(early_stop_callback)
@@ -153,7 +153,12 @@ def main():
     # generated a random seed
     args.seed = random.randint(1, 9999)
     print(f"Generated random seed: {args.seed}")
+    # seed everything
     pl.seed_everything(args.seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     data_module = DInterface(**vars(args))
 
     # here we perform feature extraction
